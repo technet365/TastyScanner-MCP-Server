@@ -1,11 +1,10 @@
 // ============================================================================
 // TastyScanner MCP Server
-// HTTP transport (Streamable HTTP / SSE) for DeerFlow AI agent
+// HTTP transport (Streamable HTTP) for DeerFlow AI agent
 // ============================================================================
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import express from "express";
 import { z } from "zod";
 
@@ -32,6 +31,7 @@ const TASTY_CLIENT_SECRET = process.env.TASTY_CLIENT_SECRET ?? "";
 const TASTY_REFRESH_TOKEN = process.env.TASTY_REFRESH_TOKEN ?? "";
 const TASTY_ACCOUNT = process.env.TASTY_ACCOUNT ?? "";
 const TASTY_PRODUCTION = (process.env.TASTY_PRODUCTION ?? "true") === "true";
+const ENABLE_LIVE_TRADING = (process.env.ENABLE_LIVE_TRADING ?? "false") === "true";
 
 const DEFAULT_SYMBOLS = [
   "SPY", "QQQ", "IWM", "TLT", "GLD", "SLV", "EEM", "XLE", "XLF", "SMH",
@@ -291,6 +291,13 @@ server.tool(
   async ({ symbol, legs, limit_price, price_effect, time_in_force, order_type }) => {
     logger.info("[Tool] execute_trade called", { symbol, legs: legs.length, limit_price, price_effect });
 
+    if (!ENABLE_LIVE_TRADING) {
+      return errorResult(
+        "TRADING_DISABLED",
+        "Live trading is disabled. Set ENABLE_LIVE_TRADING=true in .env to enable order execution.",
+      );
+    }
+
     if (!tastyClient.isConnected) {
       return errorResult("NOT_CONNECTED", "TastyTrade connection not established.");
     }
@@ -413,6 +420,13 @@ server.tool(
   },
   async ({ order_id, adjustment, custom_price }) => {
     logger.info("[Tool] adjust_order called", { order_id, adjustment, custom_price });
+
+    if (!ENABLE_LIVE_TRADING) {
+      return errorResult(
+        "TRADING_DISABLED",
+        "Live trading is disabled. Set ENABLE_LIVE_TRADING=true in .env to enable order adjustments.",
+      );
+    }
 
     if (!tastyClient.isConnected) {
       return errorResult("NOT_CONNECTED", "TastyTrade connection not established.");
@@ -770,31 +784,12 @@ async function main() {
     }
   });
 
-  // --- Legacy SSE transport fallback ---
-  // Some MCP clients may still use the older SSE protocol
-
-  let legacySseTransport: SSEServerTransport | null = null;
-
-  app.get("/sse", async (_req, res) => {
-    logger.info("[MCP] Legacy SSE connection");
-    legacySseTransport = new SSEServerTransport("/messages", res);
-    await server.connect(legacySseTransport);
-  });
-
-  app.post("/messages", async (req, res) => {
-    if (!legacySseTransport) {
-      res.status(400).json({ error: "No SSE connection established" });
-      return;
-    }
-    await legacySseTransport.handlePostMessage(req, res, req.body);
-  });
-
   // Start server
   app.listen(PORT, "0.0.0.0", () => {
     logger.info(`=== TastyScanner MCP Server listening on port ${PORT} ===`);
     logger.info(`  Streamable HTTP: http://0.0.0.0:${PORT}/mcp`);
-    logger.info(`  Legacy SSE:      http://0.0.0.0:${PORT}/sse`);
     logger.info(`  Health:          http://0.0.0.0:${PORT}/health`);
+    logger.info(`  Live trading:    ${ENABLE_LIVE_TRADING ? "ENABLED" : "DISABLED"}`);
   });
 }
 
