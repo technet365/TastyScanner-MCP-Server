@@ -75,20 +75,17 @@ server.tool(
   "IV (Implied Volatility Index — actual IV percentage), beta (correlation to SPY), " +
   "and next earnings date. Results sorted by IVR descending — high IVR (>30) = best for selling premium.\n\n" +
   "SYMBOL SOURCES (use one):\n" +
-  "• watchlist — name of a personal TastyTrade watchlist (use get_watchlists to see available ones)\n" +
-  "• public_watchlist — name of a TastyTrade platform watchlist (e.g. 'High Options Volume')\n" +
+  "• watchlist — name of a watchlist. Looks in personal watchlists first, then falls back to TastyTrade platform watchlists automatically.\n" +
   "• symbols — explicit list of tickers\n" +
   "• (none) — falls back to built-in default list (~40 popular symbols)\n\n" +
-  "WORKFLOW: Use get_watchlists() first to see your lists, then scan with watchlist='My Candidates'.",
+  "WORKFLOW: Use get_watchlists() first to see your lists, then scan with watchlist='My Candidates'. " +
+  "If a personal watchlist by that name doesn't exist, the tool automatically checks TastyTrade's " +
+  "public platform watchlists (High Options Volume, High IVR, etc.).",
   {
     watchlist: z
       .string()
       .optional()
-      .describe("Name of a personal TastyTrade watchlist to scan (from get_watchlists)."),
-    public_watchlist: z
-      .string()
-      .optional()
-      .describe("Name of a TastyTrade platform watchlist to scan (e.g. 'High Options Volume')."),
+      .describe("Watchlist name to scan. Searches personal watchlists first, falls back to TastyTrade platform watchlists if not found."),
     symbols: z
       .array(z.string())
       .optional()
@@ -110,8 +107,8 @@ server.tool(
       .optional()
       .describe("Hide symbols with earnings within N days (avoids IV crush risk)."),
   },
-  async ({ watchlist, public_watchlist, symbols, min_ivr, min_price, max_price, hide_earnings_within_days }) => {
-    logger.info("[Tool] get_market_overview called", { watchlist, public_watchlist, symbols, min_ivr });
+  async ({ watchlist, symbols, min_ivr, min_price, max_price, hide_earnings_within_days }) => {
+    logger.info("[Tool] get_market_overview called", { watchlist, symbols, min_ivr });
 
     if (!tastyClient.isConnected) {
       return errorResult("NOT_CONNECTED", "TastyTrade connection not established.");
@@ -120,25 +117,54 @@ server.tool(
     try {
       // Resolve symbols from source
       let targetSymbols: string[];
+      let resolvedSource = "default";
 
       if (symbols && symbols.length > 0) {
         targetSymbols = symbols;
+        resolvedSource = "custom";
       } else if (watchlist) {
-        const wl = await tastyClient.getWatchlist(watchlist);
-        const entries = wl?.["watchlist-entries"] ?? wl?.entries ?? [];
-        targetSymbols = entries.map((e: any) => e.symbol ?? e).filter(Boolean);
-        if (targetSymbols.length === 0) {
-          return errorResult("EMPTY_WATCHLIST", `Watchlist '${watchlist}' is empty or not found.`);
+        // Try personal watchlist first
+        let wl: any = null;
+        let sourceType = "personal";
+
+        try {
+          wl = await tastyClient.getWatchlist(watchlist);
+        } catch {
+          // Personal watchlist not found — try public
         }
-        logger.info(`[Tool] Scanning watchlist '${watchlist}': ${targetSymbols.length} symbols`);
-      } else if (public_watchlist) {
-        const wl = await tastyClient.getWatchlist(public_watchlist);
-        const entries = wl?.["watchlist-entries"] ?? wl?.entries ?? [];
-        targetSymbols = entries.map((e: any) => e.symbol ?? e).filter(Boolean);
-        if (targetSymbols.length === 0) {
-          return errorResult("EMPTY_WATCHLIST", `Public watchlist '${public_watchlist}' is empty or not found.`);
+
+        let entries = wl?.["watchlist-entries"] ?? wl?.entries ?? [];
+        let wlSymbols = entries.map((e: any) => e.symbol ?? e).filter(Boolean);
+
+        // Fallback to public watchlist if personal is empty or not found
+        if (wlSymbols.length === 0) {
+          logger.info(`[Tool] Personal watchlist '${watchlist}' not found, trying public...`);
+          sourceType = "platform";
+          try {
+            const publicWatchlists = await tastyClient.getPublicWatchlists();
+            const match = (Array.isArray(publicWatchlists) ? publicWatchlists : [])
+              .find((pw: any) => (pw.name ?? "").toLowerCase() === watchlist.toLowerCase());
+
+            if (match) {
+              entries = match["watchlist-entries"] ?? match.entries ?? [];
+              wlSymbols = entries.map((e: any) => e.symbol ?? e).filter(Boolean);
+            }
+          } catch {
+            // Public lookup also failed
+          }
         }
-        logger.info(`[Tool] Scanning public watchlist '${public_watchlist}': ${targetSymbols.length} symbols`);
+
+        if (wlSymbols.length === 0) {
+          return errorResult(
+            "WATCHLIST_NOT_FOUND",
+            `Watchlist '${watchlist}' not found in personal or platform watchlists. ` +
+            `Use get_watchlists() to see available names.`,
+          );
+        }
+
+        targetSymbols = wlSymbols;
+        resolvedSource = `${sourceType}:${watchlist}`;
+        logger.info(`[Tool] Scanning ${sourceType} watchlist '${watchlist}': ${targetSymbols.length} symbols`);
       } else {
         targetSymbols = DEFAULT_SYMBOLS;
       }
@@ -182,7 +208,7 @@ server.tool(
           {
             type: "text" as const,
             text: JSON.stringify({
-              source: watchlist ? `watchlist:${watchlist}` : public_watchlist ? `public:${public_watchlist}` : symbols ? "custom" : "default",
+              source: resolvedSource,
               count: results.length,
               items: results,
             }, null, 2),
