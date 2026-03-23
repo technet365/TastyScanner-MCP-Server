@@ -9,7 +9,7 @@ import express from "express";
 import { z } from "zod";
 
 import { TastyClient } from "./tasty-client.js";
-import { StrategyBuilder } from "./strategy-builder.js";
+import { StrategyBuilder, StrategyType } from "./strategy-builder.js";
 import {
   MarketOverviewItem,
   Position,
@@ -70,8 +70,12 @@ const server = new McpServer({
 
 server.tool(
   "get_market_overview",
-  "Returns market overview with IVR, IV, beta, price, and earnings dates for tracked symbols. " +
-  "Results sorted by IVR descending — high IVR symbols are best candidates for selling premium.",
+  "Scans a watchlist of symbols and returns key metrics for premium-selling analysis. " +
+  "Each symbol includes: current price, IVR (Implied Volatility Rank 0-100 — measures how high current IV is relative to its 52-week range), " +
+  "IV (Implied Volatility Index — the actual IV percentage), beta (correlation to SPY), " +
+  "and next earnings date. Results sorted by IVR descending — high IVR symbols (>30) are the best candidates " +
+  "for selling premium because options are relatively expensive. " +
+  "Default watchlist: ~40 symbols including ETFs (SPY, QQQ, IWM), mega-caps (AAPL, TSLA, NVDA), and popular mid-caps.",
   {
     symbols: z
       .array(z.string())
@@ -144,37 +148,66 @@ server.tool(
 
 server.tool(
   "get_strategies",
-  "Returns available Iron Condor setups for a given symbol. " +
-  "Analyzes options chain, builds credit spreads, combines into condors. " +
-  "Results sorted by risk/reward ratio (lower = better).",
+  "Scans the options chain for a symbol and builds trading strategy setups. " +
+  "Supports 12 strategy types across credit and debit families:\n\n" +
+  "CREDIT STRATEGIES (sell premium, positive theta, profit from time decay):\n" +
+  "• iron_condor — 4 legs: put spread + call spread at different strikes. Neutral outlook, defined risk.\n" +
+  "• put_credit_spread — 2 legs: STO put + BTO put below. Bullish, profits if stock stays above short strike.\n" +
+  "• call_credit_spread — 2 legs: STO call + BTO call above. Bearish, profits if stock stays below short strike.\n" +
+  "• iron_butterfly — 4 legs: like iron condor but short strikes at same ATM price. Higher credit, tighter range.\n" +
+  "• jade_lizard — 3 legs: naked STO put + call credit spread. Zero upside risk when credit ≥ wings.\n" +
+  "• twisted_sister — 3 legs: naked STO call + put credit spread. Zero downside risk when credit ≥ wings.\n\n" +
+  "DEBIT STRATEGIES (buy premium, negative theta, profit from large moves or direction):\n" +
+  "• long_straddle — 2 legs: BTO put + BTO call at same strike. Profits from big move in either direction.\n" +
+  "• long_strangle — 2 legs: BTO put + BTO call at different OTM strikes. Cheaper than straddle, needs bigger move.\n" +
+  "• bull_call_spread — 2 legs: BTO call + STO call above. Bullish directional, defined risk.\n" +
+  "• bear_put_spread — 2 legs: BTO put + STO put below. Bearish directional, defined risk.\n" +
+  "• call_butterfly — 3 legs: BTO lower + 2×STO mid + BTO upper (calls). Profits if stock pins near short strike.\n" +
+  "• put_butterfly — 3 legs: BTO lower + 2×STO mid + BTO upper (puts). Profits if stock pins near short strike.\n\n" +
+  "Results sorted by risk/reward ratio (lower = better). " +
+  "Use strategy_type='all' to scan everything, or pick a specific type.",
   {
-    symbol: z.string().describe("Ticker symbol (e.g. 'SPY', 'AAPL')"),
+    symbol: z.string().describe("Ticker symbol (e.g. 'SPY', 'AAPL', 'TSLA')"),
+    strategy_type: z
+      .enum([
+        "all",
+        "iron_condor", "put_credit_spread", "call_credit_spread",
+        "iron_butterfly", "jade_lizard", "twisted_sister",
+        "long_straddle", "long_strangle",
+        "bull_call_spread", "bear_put_spread",
+        "call_butterfly", "put_butterfly",
+      ])
+      .optional()
+      .describe("Which strategy type to build. Default: 'all' (scans all 12 types)."),
     min_dte: z.number().optional().describe("Minimum days to expiration (default: 20)"),
     max_dte: z.number().optional().describe("Maximum days to expiration (default: 60)"),
-    min_delta: z.number().optional().describe("Minimum short strike delta (default: 0.10)"),
-    max_delta: z.number().optional().describe("Maximum short strike delta (default: 0.30)"),
-    wings: z.array(z.number()).optional().describe("Wing widths to test (default: [1,2,3,5,10])"),
-    max_results: z.number().optional().describe("Limit number of results (default: 20)"),
+    min_delta: z.number().optional().describe("Min delta for credit strategy short strikes (default: 0.10)"),
+    max_delta: z.number().optional().describe("Max delta for credit strategy short strikes (default: 0.30)"),
+    debit_min_delta: z.number().optional().describe("Min delta for debit strategy long strikes (default: 0.30)"),
+    debit_max_delta: z.number().optional().describe("Max delta for debit strategy long strikes (default: 0.50)"),
+    wings: z.array(z.number()).optional().describe("Wing widths to test in dollars (default: [1,2,3,5,10])"),
+    max_results: z.number().optional().describe("Limit number of results returned (default: 20)"),
   },
-  async ({ symbol, min_dte, max_dte, min_delta, max_delta, wings, max_results }) => {
-    logger.info("[Tool] get_strategies called", { symbol, min_dte, max_dte });
+  async ({ symbol, strategy_type, min_dte, max_dte, min_delta, max_delta, debit_min_delta, debit_max_delta, wings, max_results }) => {
+    const stype = (strategy_type ?? "all") as StrategyType;
+    logger.info("[Tool] get_strategies called", { symbol, strategy_type: stype, min_dte, max_dte });
 
     if (!tastyClient.isConnected) {
       return errorResult("NOT_CONNECTED", "TastyTrade connection not established.");
     }
 
     try {
-      // Build a strategy builder with custom filters if provided
       const builder = new StrategyBuilder(tastyClient, {
         ...(min_dte !== undefined && { minDTE: min_dte }),
         ...(max_dte !== undefined && { maxDTE: max_dte }),
         ...(min_delta !== undefined && { minDelta: min_delta }),
         ...(max_delta !== undefined && { maxDelta: max_delta }),
+        ...(debit_min_delta !== undefined && { debitMinDelta: debit_min_delta }),
+        ...(debit_max_delta !== undefined && { debitMaxDelta: debit_max_delta }),
         ...(wings !== undefined && { wings }),
       });
 
-      const strategies = await builder.buildStrategies(symbol.toUpperCase());
-
+      const strategies = await builder.buildStrategies(symbol.toUpperCase(), stype);
       const limited = strategies.slice(0, max_results ?? 20);
 
       return {
@@ -197,8 +230,12 @@ server.tool(
 
 server.tool(
   "get_positions",
-  "Returns current open positions from TastyTrade account. " +
-  "Shows P&L, DTE, legs, and strategy type for each position.",
+  "Returns all current open positions from the TastyTrade account. " +
+  "Each position includes: underlying symbol, detected strategy type (Iron Condor, Put Credit Spread, etc.), " +
+  "individual legs with strikes/expiries/quantities, entry credit or debit, current market value, " +
+  "unrealized P&L in dollars and percentage, days to expiration, and open timestamp. " +
+  "Strategy detection is automatic based on leg structure. " +
+  "Use this before close_position() to see what needs managing.",
   {},
   async () => {
     logger.info("[Tool] get_positions called");
@@ -264,8 +301,12 @@ server.tool(
 
 server.tool(
   "execute_trade",
-  "Places an options order on TastyTrade. CAUTION: This executes real trades with real money. " +
-  "Double-check all parameters before calling. Returns order ID and status.",
+  "Places an options order on TastyTrade. ⚠️ EXECUTES REAL TRADES WITH REAL MONEY. " +
+  "Requires ENABLE_LIVE_TRADING=true in environment. " +
+  "Accepts multi-leg orders (spreads, condors, butterflies). Each leg needs an OCC option symbol " +
+  "(e.g. 'SPY   260417P00560000'), action (Buy/Sell to Open/Close), and quantity. " +
+  "Always use order_type='Limit' with a specific limit_price — never market orders on options. " +
+  "After placing, use get_working_orders() to monitor fill status and adjust_order() if not filling.",
   {
     symbol: z.string().describe("Underlying symbol (e.g. 'SPY')"),
     legs: z
@@ -579,7 +620,10 @@ server.tool(
 
 server.tool(
   "get_account_info",
-  "Returns account balance info: cash balance, net liquidity, buying power.",
+  "Returns TastyTrade account balance and buying power details: " +
+  "cash balance, net liquidating value, derivative (options) buying power, " +
+  "stock buying power, maintenance requirement, and pending cash. " +
+  "Use this to check available capital before placing trades with execute_trade().",
   {},
   async () => {
     logger.info("[Tool] get_account_info called");
@@ -610,7 +654,10 @@ server.tool(
 
 server.tool(
   "get_connection_status",
-  "Returns current TastyTrade connection status: whether connected, streamer active, account number.",
+  "Returns TastyTrade connection health: whether authenticated, " +
+  "whether the DxLink quote streamer is active (needed for real-time data in get_strategies), " +
+  "and the connected account number. Call this first to verify the MCP server is operational " +
+  "before using any other tools.",
   {},
   async () => {
     const status = tastyClient.getStatus();

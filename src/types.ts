@@ -29,6 +29,7 @@ export interface StrategyLeg {
   price: number;        // mid price
   delta: number;
   spread: number;       // bid-ask spread
+  quantity?: number;     // defaults to 1, butterflies use 2 for short leg
 }
 
 export interface StrategySetup {
@@ -36,15 +37,16 @@ export interface StrategySetup {
   expiry_date: string;    // ISO date
   dte: number;            // days to expiration
   legs: StrategyLeg[];
-  credit: number;
-  max_profit: number;
+  credit: number;         // positive for credit strategies, negative for debit
+  max_profit: number;     // -1 means unlimited (straddles/strangles)
   max_loss: number;
-  rr_ratio: number;       // risk/reward ratio (wings / credit)
+  rr_ratio: number;       // risk/reward ratio
   pop: number;            // probability of profit %
   theta: number;
   delta: number;
   wings: number;
-  bpe: number;            // buying power effect (≈ max_loss for IC)
+  bpe: number;            // buying power effect
+  price_effect: "Credit" | "Debit";
 }
 
 export type StrategiesResponse = StrategySetup[];
