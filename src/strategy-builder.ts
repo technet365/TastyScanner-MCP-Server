@@ -772,27 +772,42 @@ export class StrategyBuilder {
   // =========================================================================
 
   private _parseChain(rawChain: any): ParsedExpiration[] {
-    const expirations: any[] =
-      rawChain?.expirations ?? rawChain?.data?.items ?? rawChain ?? [];
-    if (!Array.isArray(expirations)) return [];
+    // SDK returns an ARRAY of chain objects, each with .expirations
+    // (see main app: tasty-market-data-provider.ts → getOptionsChain)
+    const chainArray: any[] = Array.isArray(rawChain) ? rawChain : [rawChain];
 
-    return expirations
-      .map((exp: any) => {
-        const strikes = (exp.strikes ?? []).map((s: any) => ({
-          strikePrice: s["strike-price"] ?? s.strikePrice ?? 0,
+    const allExpirations: ParsedExpiration[] = [];
+
+    for (const chain of chainArray) {
+      const expirations: any[] = chain?.expirations ?? chain?.data?.items ?? [];
+      if (!Array.isArray(expirations)) continue;
+
+      for (const exp of expirations) {
+        const rawStrikes = exp?.strikes ?? exp?.["strikes"] ?? [];
+        if (!Array.isArray(rawStrikes) || rawStrikes.length === 0) continue;
+
+        const strikes = rawStrikes.map((s: any) => ({
+          strikePrice: parseFloat(s["strike-price"] ?? s.strikePrice ?? "0"),
           callSymbol: s.call ?? s.callId ?? "",
           putSymbol: s.put ?? s.putId ?? "",
           callStreamer: s["call-streamer-symbol"] ?? s.callStreamerSymbol ?? s.call ?? "",
           putStreamer: s["put-streamer-symbol"] ?? s.putStreamerSymbol ?? s.put ?? "",
         }));
-        return {
+
+        allExpirations.push({
           expirationDate: exp["expiration-date"] ?? exp.expirationDate ?? "",
           daysToExpiration: exp["days-to-expiration"] ?? exp.daysToExpiration ?? 0,
           expirationType: exp["expiration-type"] ?? exp.expirationType ?? "",
           strikes,
-        };
-      })
-      .filter((exp: ParsedExpiration) => exp.strikes.length > 0);
+        });
+      }
+    }
+
+    logger.debug(
+      `[StrategyBuilder] Parsed ${allExpirations.length} expirations from ${chainArray.length} chain(s)`,
+    );
+
+    return allExpirations;
   }
 
   private _buildOptionDataList(exp: ParsedExpiration, type: "Put" | "Call"): OptionData[] {
