@@ -70,17 +70,29 @@ const server = new McpServer({
 
 server.tool(
   "get_market_overview",
-  "Scans a watchlist of symbols and returns key metrics for premium-selling analysis. " +
-  "Each symbol includes: current price, IVR (Implied Volatility Rank 0-100 — measures how high current IV is relative to its 52-week range), " +
-  "IV (Implied Volatility Index — the actual IV percentage), beta (correlation to SPY), " +
-  "and next earnings date. Results sorted by IVR descending — high IVR symbols (>30) are the best candidates " +
-  "for selling premium because options are relatively expensive. " +
-  "Default watchlist: ~40 symbols including ETFs (SPY, QQQ, IWM), mega-caps (AAPL, TSLA, NVDA), and popular mid-caps.",
+  "Scans symbols and returns key metrics for premium-selling analysis. " +
+  "Each symbol includes: current price, IVR (Implied Volatility Rank 0-100 — how high current IV is vs 52-week range), " +
+  "IV (Implied Volatility Index — actual IV percentage), beta (correlation to SPY), " +
+  "and next earnings date. Results sorted by IVR descending — high IVR (>30) = best for selling premium.\n\n" +
+  "SYMBOL SOURCES (use one):\n" +
+  "• watchlist — name of a personal TastyTrade watchlist (use get_watchlists to see available ones)\n" +
+  "• public_watchlist — name of a TastyTrade platform watchlist (e.g. 'High Options Volume')\n" +
+  "• symbols — explicit list of tickers\n" +
+  "• (none) — falls back to built-in default list (~40 popular symbols)\n\n" +
+  "WORKFLOW: Use get_watchlists() first to see your lists, then scan with watchlist='My Candidates'.",
   {
+    watchlist: z
+      .string()
+      .optional()
+      .describe("Name of a personal TastyTrade watchlist to scan (from get_watchlists)."),
+    public_watchlist: z
+      .string()
+      .optional()
+      .describe("Name of a TastyTrade platform watchlist to scan (e.g. 'High Options Volume')."),
     symbols: z
       .array(z.string())
       .optional()
-      .describe("Optional list of symbols to scan. If empty, uses default watchlist (~40 symbols)."),
+      .describe("Explicit list of symbols to scan. Overrides watchlist if both provided."),
     min_ivr: z
       .number()
       .optional()
@@ -93,16 +105,44 @@ server.tool(
       .number()
       .optional()
       .describe("Maximum stock price filter."),
+    hide_earnings_within_days: z
+      .number()
+      .optional()
+      .describe("Hide symbols with earnings within N days (avoids IV crush risk)."),
   },
-  async ({ symbols, min_ivr, min_price, max_price }) => {
-    logger.info("[Tool] get_market_overview called", { symbols, min_ivr, min_price, max_price });
+  async ({ watchlist, public_watchlist, symbols, min_ivr, min_price, max_price, hide_earnings_within_days }) => {
+    logger.info("[Tool] get_market_overview called", { watchlist, public_watchlist, symbols, min_ivr });
 
     if (!tastyClient.isConnected) {
       return errorResult("NOT_CONNECTED", "TastyTrade connection not established.");
     }
 
     try {
-      const targetSymbols = symbols && symbols.length > 0 ? symbols : DEFAULT_SYMBOLS;
+      // Resolve symbols from source
+      let targetSymbols: string[];
+
+      if (symbols && symbols.length > 0) {
+        targetSymbols = symbols;
+      } else if (watchlist) {
+        const wl = await tastyClient.getWatchlist(watchlist);
+        const entries = wl?.["watchlist-entries"] ?? wl?.entries ?? [];
+        targetSymbols = entries.map((e: any) => e.symbol ?? e).filter(Boolean);
+        if (targetSymbols.length === 0) {
+          return errorResult("EMPTY_WATCHLIST", `Watchlist '${watchlist}' is empty or not found.`);
+        }
+        logger.info(`[Tool] Scanning watchlist '${watchlist}': ${targetSymbols.length} symbols`);
+      } else if (public_watchlist) {
+        const wl = await tastyClient.getWatchlist(public_watchlist);
+        const entries = wl?.["watchlist-entries"] ?? wl?.entries ?? [];
+        targetSymbols = entries.map((e: any) => e.symbol ?? e).filter(Boolean);
+        if (targetSymbols.length === 0) {
+          return errorResult("EMPTY_WATCHLIST", `Public watchlist '${public_watchlist}' is empty or not found.`);
+        }
+        logger.info(`[Tool] Scanning public watchlist '${public_watchlist}': ${targetSymbols.length} symbols`);
+      } else {
+        targetSymbols = DEFAULT_SYMBOLS;
+      }
+
       const metrics = await tastyClient.getBulkSymbolMetrics(targetSymbols);
 
       let results: MarketOverviewItem[] = metrics.map((m) => ({
@@ -124,6 +164,15 @@ server.tool(
       if (max_price !== undefined) {
         results = results.filter((r) => r.price <= max_price);
       }
+      if (hide_earnings_within_days !== undefined && hide_earnings_within_days > 0) {
+        const now = new Date();
+        results = results.filter((r) => {
+          if (!r.earnings_date) return true;
+          const earningsDate = new Date(r.earnings_date);
+          const daysUntil = Math.ceil((earningsDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+          return daysUntil < 0 || daysUntil > hide_earnings_within_days;
+        });
+      }
 
       // Sort by IVR descending
       results.sort((a, b) => b.ivr - a.ivr);
@@ -132,7 +181,11 @@ server.tool(
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify(results, null, 2),
+            text: JSON.stringify({
+              source: watchlist ? `watchlist:${watchlist}` : public_watchlist ? `public:${public_watchlist}` : symbols ? "custom" : "default",
+              count: results.length,
+              items: results,
+            }, null, 2),
           },
         ],
       };
@@ -672,6 +725,179 @@ server.tool(
   },
 );
 
+// ===========================================================================
+// TOOL 10: get_watchlists
+// ===========================================================================
+
+server.tool(
+  "get_watchlists",
+  "Returns all available watchlists — both your personal TastyTrade watchlists " +
+  "and TastyTrade's platform watchlists (High Options Volume, High IVR, etc.). " +
+  "Personal watchlists can be managed with manage_watchlist(). " +
+  "Use the watchlist names as input to get_market_overview(watchlist='...') to scan them.\n\n" +
+  "WORKFLOW:\n" +
+  "1. get_watchlists() → see what's available\n" +
+  "2. get_market_overview(watchlist='My Candidates') → scan a specific watchlist\n" +
+  "3. manage_watchlist(action='add', ...) → add promising symbols to your list",
+  {
+    include_public: z
+      .boolean()
+      .optional()
+      .describe("Include TastyTrade platform watchlists (default: true)"),
+  },
+  async ({ include_public }) => {
+    logger.info("[Tool] get_watchlists called", { include_public });
+
+    if (!tastyClient.isConnected) {
+      return errorResult("NOT_CONNECTED", "TastyTrade connection not established.");
+    }
+
+    try {
+      const userWatchlists = await tastyClient.getUserWatchlists();
+
+      const userFormatted = (Array.isArray(userWatchlists) ? userWatchlists : []).map((wl: any) => ({
+        name: wl.name ?? wl["name"] ?? "",
+        type: "personal" as const,
+        symbols: (wl["watchlist-entries"] ?? wl.entries ?? []).map((e: any) => e.symbol ?? e),
+      }));
+
+      let publicFormatted: any[] = [];
+      if (include_public !== false) {
+        const publicWatchlists = await tastyClient.getPublicWatchlists();
+        publicFormatted = (Array.isArray(publicWatchlists) ? publicWatchlists : []).map((wl: any) => ({
+          name: wl.name ?? wl["name"] ?? "",
+          type: "platform" as const,
+          symbol_count: (wl["watchlist-entries"] ?? wl.entries ?? []).length,
+        }));
+      }
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              personal: userFormatted,
+              platform: publicFormatted,
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (err: any) {
+      return errorResult("WATCHLIST_FAILED", `Failed to fetch watchlists: ${err.message}`);
+    }
+  },
+);
+
+// ===========================================================================
+// TOOL 11: manage_watchlist
+// ===========================================================================
+
+server.tool(
+  "manage_watchlist",
+  "Manages your personal TastyTrade watchlists. Actions:\n\n" +
+  "• create — Create a new watchlist with given symbols. Use this to build a curated list of candidates.\n" +
+  "• add — Add symbols to an existing watchlist. Use after scanning market to save good candidates.\n" +
+  "• remove — Remove symbols from a watchlist. Use to clean out positions you've closed or symbols with poor metrics.\n" +
+  "• delete — Delete an entire watchlist.\n\n" +
+  "WORKFLOW: After scanning with get_market_overview(), add high-IVR symbols to your watchlist. " +
+  "Periodically clean out symbols that no longer meet criteria. " +
+  "Then use get_strategies(symbol) on each watchlist member to find trades.",
+  {
+    action: z
+      .enum(["create", "add", "remove", "delete"])
+      .describe("What to do with the watchlist"),
+    name: z
+      .string()
+      .describe("Watchlist name (e.g. 'Premium Candidates', 'High IVR')"),
+    symbols: z
+      .array(z.string())
+      .optional()
+      .describe("Symbols to add/remove/create with. Not needed for 'delete'."),
+  },
+  async ({ action, name, symbols }) => {
+    logger.info("[Tool] manage_watchlist called", { action, name, symbols });
+
+    if (!tastyClient.isConnected) {
+      return errorResult("NOT_CONNECTED", "TastyTrade connection not established.");
+    }
+
+    try {
+      switch (action) {
+        case "create": {
+          if (!symbols || symbols.length === 0) {
+            return errorResult("MISSING_SYMBOLS", "Provide at least one symbol to create a watchlist.");
+          }
+          const entries = symbols.map((s) => ({ symbol: s.toUpperCase() }));
+          await tastyClient.createWatchlist({
+            name,
+            "watchlist-entries": entries,
+          });
+          return successResult(`Watchlist '${name}' created with ${symbols.length} symbols: ${symbols.join(", ")}`);
+        }
+
+        case "add": {
+          if (!symbols || symbols.length === 0) {
+            return errorResult("MISSING_SYMBOLS", "Provide symbols to add.");
+          }
+          // Get current watchlist, merge, replace
+          const current = await tastyClient.getWatchlist(name);
+          const currentEntries: any[] = current?.["watchlist-entries"] ?? current?.entries ?? [];
+          const currentSymbols = new Set(currentEntries.map((e: any) => (e.symbol ?? e).toUpperCase()));
+          const newSymbols = symbols.filter((s) => !currentSymbols.has(s.toUpperCase()));
+
+          if (newSymbols.length === 0) {
+            return successResult(`All symbols already in '${name}'. No changes made.`);
+          }
+
+          const merged = [
+            ...currentEntries,
+            ...newSymbols.map((s) => ({ symbol: s.toUpperCase() })),
+          ];
+          await tastyClient.replaceWatchlist(name, {
+            name,
+            "watchlist-entries": merged,
+          });
+          return successResult(
+            `Added ${newSymbols.length} symbols to '${name}': ${newSymbols.join(", ")}. ` +
+            `Total: ${merged.length} symbols.`,
+          );
+        }
+
+        case "remove": {
+          if (!symbols || symbols.length === 0) {
+            return errorResult("MISSING_SYMBOLS", "Provide symbols to remove.");
+          }
+          const current = await tastyClient.getWatchlist(name);
+          const currentEntries: any[] = current?.["watchlist-entries"] ?? current?.entries ?? [];
+          const toRemove = new Set(symbols.map((s) => s.toUpperCase()));
+          const filtered = currentEntries.filter(
+            (e: any) => !toRemove.has((e.symbol ?? e).toUpperCase()),
+          );
+
+          await tastyClient.replaceWatchlist(name, {
+            name,
+            "watchlist-entries": filtered,
+          });
+          return successResult(
+            `Removed ${currentEntries.length - filtered.length} symbols from '${name}'. ` +
+            `Remaining: ${filtered.length} symbols.`,
+          );
+        }
+
+        case "delete": {
+          await tastyClient.deleteWatchlist(name);
+          return successResult(`Watchlist '${name}' deleted.`);
+        }
+
+        default:
+          return errorResult("INVALID_ACTION", `Unknown action: ${action}`);
+      }
+    } catch (err: any) {
+      return errorResult("WATCHLIST_FAILED", `Failed to ${action} watchlist: ${err.message}`);
+    }
+  },
+);
+
 // ---------------------------------------------------------------------------
 // Helper functions
 // ---------------------------------------------------------------------------
@@ -683,6 +909,17 @@ function errorResult(code: string, message: string) {
       {
         type: "text" as const,
         text: JSON.stringify(makeError(code, message)),
+      },
+    ],
+  };
+}
+
+function successResult(message: string) {
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify({ success: true, message }),
       },
     ],
   };

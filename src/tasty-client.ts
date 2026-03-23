@@ -418,6 +418,78 @@ export class TastyClient {
   }
 
   // -------------------------------------------------------------------------
+  // Public API — Watchlists
+  // -------------------------------------------------------------------------
+
+  /** User's personal watchlists (saved on TastyTrade account) */
+  async getUserWatchlists(): Promise<any[]> {
+    this._ensureConnected();
+    try {
+      const result = await this.client!.watchlistsService.getAllWatchlists();
+      return result ?? [];
+    } catch (err: any) {
+      logger.error("[TastyClient] getUserWatchlists failed:", err.message);
+      throw err;
+    }
+  }
+
+  /** TastyTrade platform watchlists (High IVR, Most Active, etc.) */
+  async getPublicWatchlists(): Promise<any[]> {
+    this._ensureConnected();
+    try {
+      const result = await this.client!.watchlistsService.getPublicWatchlists();
+      return result ?? [];
+    } catch (err: any) {
+      logger.error("[TastyClient] getPublicWatchlists failed:", err.message);
+      throw err;
+    }
+  }
+
+  /** Get a single watchlist by name */
+  async getWatchlist(name: string): Promise<any> {
+    this._ensureConnected();
+    try {
+      return await this.client!.watchlistsService.getSingleWatchlist(name);
+    } catch (err: any) {
+      logger.error(`[TastyClient] getWatchlist(${name}) failed:`, err.message);
+      throw err;
+    }
+  }
+
+  /** Create a new user watchlist */
+  async createWatchlist(watchlist: object): Promise<any> {
+    this._ensureConnected();
+    try {
+      return await this.client!.watchlistsService.createAccountWatchlist(watchlist);
+    } catch (err: any) {
+      logger.error("[TastyClient] createWatchlist failed:", err.message);
+      throw err;
+    }
+  }
+
+  /** Replace (update) an existing watchlist — use for add/remove symbols */
+  async replaceWatchlist(name: string, watchlist: object): Promise<any> {
+    this._ensureConnected();
+    try {
+      return await this.client!.watchlistsService.replaceWatchlist(name, watchlist);
+    } catch (err: any) {
+      logger.error(`[TastyClient] replaceWatchlist(${name}) failed:`, err.message);
+      throw err;
+    }
+  }
+
+  /** Delete a user watchlist */
+  async deleteWatchlist(name: string): Promise<any> {
+    this._ensureConnected();
+    try {
+      return await this.client!.watchlistsService.deleteWatchlist(name);
+    } catch (err: any) {
+      logger.error(`[TastyClient] deleteWatchlist(${name}) failed:`, err.message);
+      throw err;
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // Internal
   // -------------------------------------------------------------------------
 
