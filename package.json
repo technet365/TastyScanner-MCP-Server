@@ -1,0 +1,24 @@
+{
+  "name": "tastyscanner-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/mcp-server.js",
+    "dev": "tsx src/mcp-server.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@tastytrade/api": "^6.0.1",
+    "axios": "^1.7.0",
+    "express": "^4.21.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "~5.7.0"
+  }
+}

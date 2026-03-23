@@ -1,0 +1,137 @@
+{
+  "get_market_overview": {
+    "description": "Returns market overview sorted by IVR descending",
+    "example_response": [
+      {
+        "symbol": "MARA",
+        "price": 18.45,
+        "ivr": 82.3,
+        "iv": 95.1,
+        "beta": 2.45,
+        "earnings_date": "2026-05-08"
+      },
+      {
+        "symbol": "RIVN",
+        "price": 12.30,
+        "ivr": 71.5,
+        "iv": 88.2,
+        "beta": 1.89,
+        "earnings_date": null
+      },
+      {
+        "symbol": "SPY",
+        "price": 582.15,
+        "ivr": 35.2,
+        "iv": 16.8,
+        "beta": 1.0,
+        "earnings_date": null
+      }
+    ]
+  },
+
+  "get_strategies": {
+    "description": "Iron Condor setups for SPY, sorted by risk/reward ratio",
+    "example_request": { "symbol": "SPY", "min_dte": 30, "max_dte": 45 },
+    "example_response": [
+      {
+        "strategy_name": "Iron Condor",
+        "expiry_date": "2026-04-17",
+        "dte": 35,
+        "legs": [
+          { "action": "BTO", "type": "Put", "strike": 555, "price": 1.25, "delta": -0.08, "spread": 0.12 },
+          { "action": "STO", "type": "Put", "strike": 560, "price": 2.10, "delta": -0.15, "spread": 0.10 },
+          { "action": "STO", "type": "Call", "strike": 600, "price": 2.35, "delta": 0.18, "spread": 0.08 },
+          { "action": "BTO", "type": "Call", "strike": 605, "price": 1.50, "delta": 0.12, "spread": 0.10 }
+        ],
+        "credit": 1.70,
+        "max_profit": 1.70,
+        "max_loss": 3.30,
+        "rr_ratio": 2.94,
+        "pop": 68.5,
+        "theta": 0.12,
+        "delta": 0.03,
+        "wings": 5,
+        "bpe": 3.30
+      }
+    ]
+  },
+
+  "get_positions": {
+    "description": "Current open positions with P&L",
+    "example_response": [
+      {
+        "position_id": "12345678",
+        "symbol": "SPY",
+        "strategy": "Iron Condor",
+        "legs": [
+          { "type": "Equity Option", "strike": 555, "expiry": "2026-04-17", "quantity": 1, "price": 1.25, "option_type": "P", "is_sell": false },
+          { "type": "Equity Option", "strike": 560, "expiry": "2026-04-17", "quantity": -1, "price": 2.10, "option_type": "P", "is_sell": true },
+          { "type": "Equity Option", "strike": 600, "expiry": "2026-04-17", "quantity": -1, "price": 2.35, "option_type": "C", "is_sell": true },
+          { "type": "Equity Option", "strike": 605, "expiry": "2026-04-17", "quantity": 1, "price": 1.50, "option_type": "C", "is_sell": false }
+        ],
+        "entry_credit": 1.70,
+        "current_value": 0.85,
+        "pnl": 85.0,
+        "pnl_percent": 50.0,
+        "dte": 25,
+        "opened_at": "2026-03-13T14:30:00Z"
+      }
+    ]
+  },
+
+  "execute_trade": {
+    "description": "Place an Iron Condor order",
+    "example_request": {
+      "symbol": "SPY",
+      "legs": [
+        { "action": "Buy to Open", "symbol": "SPY   260417P00555000", "quantity": 1 },
+        { "action": "Sell to Open", "symbol": "SPY   260417P00560000", "quantity": 1 },
+        { "action": "Sell to Open", "symbol": "SPY   260417C00600000", "quantity": 1 },
+        { "action": "Buy to Open", "symbol": "SPY   260417C00605000", "quantity": 1 }
+      ],
+      "limit_price": 1.70,
+      "price_effect": "Credit"
+    },
+    "example_response": {
+      "order_id": "87654321",
+      "status": "Received",
+      "message": "Order placed for SPY: 4 legs at 1.7 Credit"
+    }
+  },
+
+  "close_position": {
+    "description": "Close an existing position",
+    "example_request": {
+      "position_id": "12345678",
+      "reason": "take_profit"
+    },
+    "example_response": {
+      "order_id": "87654322",
+      "status": "submitted",
+      "pnl_realized": 85.0,
+      "message": "Close request for position 12345678 (reason: take_profit)."
+    }
+  },
+
+  "get_account_info": {
+    "description": "Account balance and buying power",
+    "example_response": {
+      "cash-balance": 25000.00,
+      "net-liquidating-value": 27500.00,
+      "derivative-buying-power": 15000.00,
+      "equity-buying-power": 50000.00,
+      "maintenance-requirement": 5000.00,
+      "pending-cash": 0.00
+    }
+  },
+
+  "get_connection_status": {
+    "description": "Check if TastyTrade is connected",
+    "example_response": {
+      "connected": true,
+      "streamer_connected": true,
+      "account_number": "5WT12345",
+      "error": null
+    }
+  }
+}
