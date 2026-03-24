@@ -2,6 +2,7 @@
 // TastyScanner MCP — TastyTrade Client Wrapper
 // OAuth authentication (clientId + clientSecret + refreshToken)
 // Same auth flow as main TastyScanner app (tasty.broker.ts)
+// + Auto-reconnect on 401 (expired token)
 // ============================================================================
 
 import TastyTradeClient, { STREAMER_STATE, MarketDataSubscriptionType } from "@tastytrade/api";
@@ -42,6 +43,7 @@ export class TastyClient {
   private accountNumber: string = "";
   private _connected = false;
   private _streamerConnected = false;
+  private _reconnecting = false;
   private streamerCache: StreamerCache = {
     quotes: new Map(),
     greeks: new Map(),
@@ -235,6 +237,50 @@ export class TastyClient {
   }
 
   // -------------------------------------------------------------------------
+  // Auto-reconnect on 401
+  // -------------------------------------------------------------------------
+
+  /**
+   * Wraps an API call with auto-reconnect logic.
+   * If the call fails with 401 (expired token), reconnects and retries once.
+   * Prevents concurrent reconnect attempts with a guard flag.
+   */
+  private async _withAutoReconnect<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (err: any) {
+      const status = err?.response?.status ?? err?.status;
+      const msg = err?.message ?? "";
+
+      if (status === 401 || msg.includes("401")) {
+        // Prevent concurrent reconnect storms
+        if (this._reconnecting) {
+          throw new Error("Reconnect already in progress — please retry in a few seconds.");
+        }
+
+        logger.warn("[TastyClient] Got 401 — token expired, reconnecting...");
+        this._reconnecting = true;
+        this._connected = false;
+        this._streamerConnected = false;
+
+        try {
+          const reconnectStatus = await this.connect();
+          if (!reconnectStatus.connected) {
+            throw new Error(`Reconnect failed: ${reconnectStatus.error}`);
+          }
+
+          logger.info("[TastyClient] Reconnected successfully, retrying call...");
+          return await fn(); // retry once after reconnect
+        } finally {
+          this._reconnecting = false;
+        }
+      }
+
+      throw err;
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // Public API — Market Data
   // -------------------------------------------------------------------------
 
@@ -257,26 +303,30 @@ export class TastyClient {
 
   async getBulkSymbolMetrics(symbols: string[]): Promise<any[]> {
     this._ensureConnected();
-    try {
-      const response = await this.client!.marketMetricsService.getMarketMetrics({
-        symbols: symbols.join(","),
-      });
-      const items = response?.data?.items ?? response?.items ?? response ?? [];
-      return Array.isArray(items) ? items : [];
-    } catch (err: any) {
-      logger.error("[TastyClient] getBulkSymbolMetrics failed:", err.message);
-      throw err;
-    }
+    return this._withAutoReconnect(async () => {
+      try {
+        const response = await this.client!.marketMetricsService.getMarketMetrics({
+          symbols: symbols.join(","),
+        });
+        const items = response?.data?.items ?? response?.items ?? response ?? [];
+        return Array.isArray(items) ? items : [];
+      } catch (err: any) {
+        logger.error("[TastyClient] getBulkSymbolMetrics failed:", err.message);
+        throw err;
+      }
+    });
   }
 
   async getOptionsChain(symbol: string): Promise<any> {
     this._ensureConnected();
-    try {
-      return await this.client!.instrumentsService.getNestedOptionChain(symbol);
-    } catch (err: any) {
-      logger.error(`[TastyClient] getOptionsChain(${symbol}) failed:`, err.message);
-      throw err;
-    }
+    return this._withAutoReconnect(async () => {
+      try {
+        return await this.client!.instrumentsService.getNestedOptionChain(symbol);
+      } catch (err: any) {
+        logger.error(`[TastyClient] getOptionsChain(${symbol}) failed:`, err.message);
+        throw err;
+      }
+    });
   }
 
   async subscribeToSymbols(streamerSymbols: string[]): Promise<void> {
@@ -310,78 +360,90 @@ export class TastyClient {
 
   async getActivePositions(): Promise<any[]> {
     this._ensureConnected();
-    try {
-      const positions = await this.client!.balancesAndPositionsService.getPositionsList(
-        this.accountNumber,
-      );
-      return positions ?? [];
-    } catch (err: any) {
-      logger.error("[TastyClient] getActivePositions failed:", err.message);
-      throw err;
-    }
+    return this._withAutoReconnect(async () => {
+      try {
+        const positions = await this.client!.balancesAndPositionsService.getPositionsList(
+          this.accountNumber,
+        );
+        return positions ?? [];
+      } catch (err: any) {
+        logger.error("[TastyClient] getActivePositions failed:", err.message);
+        throw err;
+      }
+    });
   }
 
   async getLiveOrders(): Promise<any[]> {
     this._ensureConnected();
-    try {
-      const orders = await this.client!.orderService.getLiveOrders(this.accountNumber);
-      return orders ?? [];
-    } catch (err: any) {
-      logger.error("[TastyClient] getLiveOrders failed:", err.message);
-      throw err;
-    }
+    return this._withAutoReconnect(async () => {
+      try {
+        const orders = await this.client!.orderService.getLiveOrders(this.accountNumber);
+        return orders ?? [];
+      } catch (err: any) {
+        logger.error("[TastyClient] getLiveOrders failed:", err.message);
+        throw err;
+      }
+    });
   }
 
   async getOrders(queryParams?: object): Promise<any[]> {
     this._ensureConnected();
-    try {
-      const orders = await this.client!.orderService.getOrders(
-        this.accountNumber,
-        queryParams,
-      );
-      return orders ?? [];
-    } catch (err: any) {
-      logger.error("[TastyClient] getOrders failed:", err.message);
-      throw err;
-    }
+    return this._withAutoReconnect(async () => {
+      try {
+        const orders = await this.client!.orderService.getOrders(
+          this.accountNumber,
+          queryParams,
+        );
+        return orders ?? [];
+      } catch (err: any) {
+        logger.error("[TastyClient] getOrders failed:", err.message);
+        throw err;
+      }
+    });
   }
 
   async getAccountBalance(): Promise<any> {
     this._ensureConnected();
-    try {
-      return await this.client!.balancesAndPositionsService.getAccountBalanceValues(
-        this.accountNumber,
-      );
-    } catch (err: any) {
-      logger.error("[TastyClient] getAccountBalance failed:", err.message);
-      throw err;
-    }
+    return this._withAutoReconnect(async () => {
+      try {
+        return await this.client!.balancesAndPositionsService.getAccountBalanceValues(
+          this.accountNumber,
+        );
+      } catch (err: any) {
+        logger.error("[TastyClient] getAccountBalance failed:", err.message);
+        throw err;
+      }
+    });
   }
 
   async sendOrder(orderData: object): Promise<any> {
     this._ensureConnected();
-    try {
-      return await this.client!.orderService.createOrder(
-        this.accountNumber,
-        orderData,
-      );
-    } catch (err: any) {
-      logger.error("[TastyClient] sendOrder failed:", err.message);
-      throw err;
-    }
+    return this._withAutoReconnect(async () => {
+      try {
+        return await this.client!.orderService.createOrder(
+          this.accountNumber,
+          orderData,
+        );
+      } catch (err: any) {
+        logger.error("[TastyClient] sendOrder failed:", err.message);
+        throw err;
+      }
+    });
   }
 
   async cancelOrder(orderId: number): Promise<any> {
     this._ensureConnected();
-    try {
-      return await this.client!.orderService.cancelOrder(
-        this.accountNumber,
-        orderId,
-      );
-    } catch (err: any) {
-      logger.error("[TastyClient] cancelOrder failed:", err.message);
-      throw err;
-    }
+    return this._withAutoReconnect(async () => {
+      try {
+        return await this.client!.orderService.cancelOrder(
+          this.accountNumber,
+          orderId,
+        );
+      } catch (err: any) {
+        logger.error("[TastyClient] cancelOrder failed:", err.message);
+        throw err;
+      }
+    });
   }
 
   /**
@@ -391,16 +453,18 @@ export class TastyClient {
    */
   async replaceOrder(orderId: number, replacementData: object): Promise<any> {
     this._ensureConnected();
-    try {
-      return await this.client!.orderService.replaceOrder(
-        this.accountNumber,
-        orderId,
-        replacementData,
-      );
-    } catch (err: any) {
-      logger.error("[TastyClient] replaceOrder failed:", err.message);
-      throw err;
-    }
+    return this._withAutoReconnect(async () => {
+      try {
+        return await this.client!.orderService.replaceOrder(
+          this.accountNumber,
+          orderId,
+          replacementData,
+        );
+      } catch (err: any) {
+        logger.error("[TastyClient] replaceOrder failed:", err.message);
+        throw err;
+      }
+    });
   }
 
   /**
@@ -409,12 +473,14 @@ export class TastyClient {
    */
   async getSymbolInfo(symbol: string): Promise<any> {
     this._ensureConnected();
-    try {
-      return await this.client!.instrumentsService.getSingleEquity(symbol);
-    } catch (err: any) {
-      logger.error(`[TastyClient] getSymbolInfo(${symbol}) failed:`, err.message);
-      throw err;
-    }
+    return this._withAutoReconnect(async () => {
+      try {
+        return await this.client!.instrumentsService.getSingleEquity(symbol);
+      } catch (err: any) {
+        logger.error(`[TastyClient] getSymbolInfo(${symbol}) failed:`, err.message);
+        throw err;
+      }
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -424,69 +490,81 @@ export class TastyClient {
   /** User's personal watchlists (saved on TastyTrade account) */
   async getUserWatchlists(): Promise<any[]> {
     this._ensureConnected();
-    try {
-      const result = await this.client!.watchlistsService.getAllWatchlists();
-      return result ?? [];
-    } catch (err: any) {
-      logger.error("[TastyClient] getUserWatchlists failed:", err.message);
-      throw err;
-    }
+    return this._withAutoReconnect(async () => {
+      try {
+        const result = await this.client!.watchlistsService.getAllWatchlists();
+        return result ?? [];
+      } catch (err: any) {
+        logger.error("[TastyClient] getUserWatchlists failed:", err.message);
+        throw err;
+      }
+    });
   }
 
   /** TastyTrade platform watchlists (High IVR, Most Active, etc.) */
   async getPublicWatchlists(): Promise<any[]> {
     this._ensureConnected();
-    try {
-      const result = await this.client!.watchlistsService.getPublicWatchlists();
-      return result ?? [];
-    } catch (err: any) {
-      logger.error("[TastyClient] getPublicWatchlists failed:", err.message);
-      throw err;
-    }
+    return this._withAutoReconnect(async () => {
+      try {
+        const result = await this.client!.watchlistsService.getPublicWatchlists();
+        return result ?? [];
+      } catch (err: any) {
+        logger.error("[TastyClient] getPublicWatchlists failed:", err.message);
+        throw err;
+      }
+    });
   }
 
   /** Get a single watchlist by name */
   async getWatchlist(name: string): Promise<any> {
     this._ensureConnected();
-    try {
-      return await this.client!.watchlistsService.getSingleWatchlist(name);
-    } catch (err: any) {
-      logger.error(`[TastyClient] getWatchlist(${name}) failed:`, err.message);
-      throw err;
-    }
+    return this._withAutoReconnect(async () => {
+      try {
+        return await this.client!.watchlistsService.getSingleWatchlist(name);
+      } catch (err: any) {
+        logger.error(`[TastyClient] getWatchlist(${name}) failed:`, err.message);
+        throw err;
+      }
+    });
   }
 
   /** Create a new user watchlist */
   async createWatchlist(watchlist: object): Promise<any> {
     this._ensureConnected();
-    try {
-      return await this.client!.watchlistsService.createAccountWatchlist(watchlist);
-    } catch (err: any) {
-      logger.error("[TastyClient] createWatchlist failed:", err.message);
-      throw err;
-    }
+    return this._withAutoReconnect(async () => {
+      try {
+        return await this.client!.watchlistsService.createAccountWatchlist(watchlist);
+      } catch (err: any) {
+        logger.error("[TastyClient] createWatchlist failed:", err.message);
+        throw err;
+      }
+    });
   }
 
   /** Replace (update) an existing watchlist — use for add/remove symbols */
   async replaceWatchlist(name: string, watchlist: object): Promise<any> {
     this._ensureConnected();
-    try {
-      return await this.client!.watchlistsService.replaceWatchlist(name, watchlist);
-    } catch (err: any) {
-      logger.error(`[TastyClient] replaceWatchlist(${name}) failed:`, err.message);
-      throw err;
-    }
+    return this._withAutoReconnect(async () => {
+      try {
+        return await this.client!.watchlistsService.replaceWatchlist(name, watchlist);
+      } catch (err: any) {
+        logger.error(`[TastyClient] replaceWatchlist(${name}) failed:`, err.message);
+        throw err;
+      }
+    });
   }
 
   /** Delete a user watchlist */
   async deleteWatchlist(name: string): Promise<any> {
     this._ensureConnected();
-    try {
-      return await this.client!.watchlistsService.deleteWatchlist(name);
-    } catch (err: any) {
-      logger.error(`[TastyClient] deleteWatchlist(${name}) failed:`, err.message);
-      throw err;
-    }
+    return this._withAutoReconnect(async () => {
+      try {
+        return await this.client!.watchlistsService.deleteWatchlist(name);
+      } catch (err: any) {
+        logger.error(`[TastyClient] deleteWatchlist(${name}) failed:`, err.message);
+        throw err;
+      }
+    });
   }
 
   // -------------------------------------------------------------------------
