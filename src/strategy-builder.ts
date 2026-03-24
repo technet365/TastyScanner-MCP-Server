@@ -17,6 +17,16 @@
 //  10. Bear Put Spread     — BTO put (higher) + STO put (lower)
 //  11. Call Butterfly       — BTO lower + 2×STO mid + BTO upper (calls)
 //  12. Put Butterfly        — BTO lower + 2×STO mid + BTO upper (puts)
+//
+// GREEKS SIGN CONVENTION:
+//   DxLink returns greeks from the option holder's perspective (long position):
+//     - Long put:  delta < 0, theta < 0
+//     - Long call: delta > 0, theta < 0
+//   For position greeks:
+//     - BTO (long):  use raw greek value  (+1 × greek)
+//     - STO (short): negate raw greek     (-1 × greek)
+//   Credit strategies should have: positive theta, near-zero delta
+//   Debit strategies should have:  negative theta
 // ============================================================================
 
 import { TastyClient } from "./tasty-client.js";
@@ -259,6 +269,8 @@ export class StrategyBuilder {
 
   private _toPutCreditSpread(ps: CreditSpread, exp: ParsedExpiration): StrategySetup {
     const maxLoss = round(ps.wingsWidth - ps.credit);
+    // BPE for put credit spread = short put strike - credit received
+    const bpe = round(ps.stoOption.strikePrice - ps.credit);
     return {
       strategy_name: "Put Credit Spread",
       expiry_date: exp.expirationDate,
@@ -270,18 +282,22 @@ export class StrategyBuilder {
       credit: ps.credit,
       max_profit: ps.credit,
       max_loss: maxLoss,
-      rr_ratio: ps.riskRewardRatio,
+      // RR = max_loss / max_profit (how much you risk per $1 of profit)
+      rr_ratio: round(maxLoss / ps.credit),
       pop: round(100 - ps.stoOption.absDelta * 100),
+      // Greeks already have correct position signs from _buildCreditSpreads
       theta: ps.theta,
       delta: ps.delta,
       wings: ps.wingsWidth,
-      bpe: maxLoss,
+      bpe,
       price_effect: "Credit",
     };
   }
 
   private _toCallCreditSpread(cs: CreditSpread, exp: ParsedExpiration): StrategySetup {
     const maxLoss = round(cs.wingsWidth - cs.credit);
+    // BPE for call credit spread = short call strike + credit received
+    const bpe = round(cs.stoOption.strikePrice + cs.credit);
     return {
       strategy_name: "Call Credit Spread",
       expiry_date: exp.expirationDate,
@@ -293,12 +309,12 @@ export class StrategyBuilder {
       credit: cs.credit,
       max_profit: cs.credit,
       max_loss: maxLoss,
-      rr_ratio: cs.riskRewardRatio,
+      rr_ratio: round(maxLoss / cs.credit),
       pop: round(100 - cs.stoOption.absDelta * 100),
       theta: cs.theta,
       delta: cs.delta,
       wings: cs.wingsWidth,
-      bpe: maxLoss,
+      bpe,
       price_effect: "Credit",
     };
   }
@@ -326,6 +342,11 @@ export class StrategyBuilder {
 
           const pop = this._calcIronCondorPop(ps, cs, credit, exp);
 
+          // IC has two BPE: lower = short put - credit, upper = short call + credit
+          // Store lower BPE (downside break-even)
+          const bpeLower = round(ps.stoOption.strikePrice - credit);
+          const bpeUpper = round(cs.stoOption.strikePrice + credit);
+
           results.push({
             strategy_name: "Iron Condor",
             expiry_date: exp.expirationDate,
@@ -339,12 +360,14 @@ export class StrategyBuilder {
             credit,
             max_profit: credit,
             max_loss: maxLoss,
-            rr_ratio: round(wings / credit),
+            // RR = maxLoss / credit (risk per $1 of max profit)
+            rr_ratio: round(maxLoss / credit),
             pop,
             theta: round(ps.theta + cs.theta),
             delta,
             wings,
-            bpe: maxLoss,
+            // Store lower BPE; profit zone is bpeLower to bpeUpper
+            bpe: bpeLower,
             price_effect: "Credit",
           });
         }
@@ -376,6 +399,9 @@ export class StrategyBuilder {
           const maxLoss = round(wings - credit);
           const pop = this._calcIronCondorPop(ps, cs, credit, exp);
 
+          // IB BPE: lower = ATM strike - credit, upper = ATM strike + credit
+          const bpeLower = round(ps.stoOption.strikePrice - credit);
+
           results.push({
             strategy_name: "Iron Butterfly",
             expiry_date: exp.expirationDate,
@@ -389,12 +415,12 @@ export class StrategyBuilder {
             credit,
             max_profit: credit,
             max_loss: maxLoss,
-            rr_ratio: round(wings / credit),
+            rr_ratio: round(maxLoss / credit),
             pop,
             theta: round(ps.theta + cs.theta),
             delta: round(ps.delta + cs.delta),
             wings,
-            bpe: maxLoss,
+            bpe: bpeLower,
             price_effect: "Credit",
           });
         }
@@ -418,6 +444,22 @@ export class StrategyBuilder {
         const maxRisk = round(put.strikePrice - credit);
         if (maxRisk <= 0) continue;
 
+        // BPE for Jade Lizard = short put strike - total credit
+        const bpe = round(put.strikePrice - credit);
+
+        // Position greeks:
+        //   STO put: negate put greeks (-1 × put.delta, -1 × put.theta)
+        //   STO call (from spread): already negated in cs.stoOption via spread
+        //   BTO call (from spread): already in cs.btoOption via spread
+        // Since cs already has correct position greeks, we just negate the naked put
+        // and add the spread's position greeks.
+        //
+        // Full calculation:
+        //   delta = (-put.delta) + cs.delta  [cs.delta already has position signs]
+        //   theta = (-put.theta) + cs.theta
+        const positionDelta = round(-put.delta + cs.delta);
+        const positionTheta = round(-put.theta + cs.theta);
+
         results.push({
           strategy_name: "Jade Lizard",
           expiry_date: exp.expirationDate,
@@ -432,10 +474,10 @@ export class StrategyBuilder {
           max_loss: maxRisk,
           rr_ratio: round(maxRisk / credit),
           pop: round(100 - put.absDelta * 100),
-          theta: round((put.theta + cs.stoOption.theta - cs.btoOption.theta) * 100),
-          delta: round((put.delta + cs.stoOption.delta - cs.btoOption.delta) * 100),
+          theta: positionTheta,
+          delta: positionDelta,
           wings: cs.wingsWidth,
-          bpe: maxRisk,
+          bpe,
           price_effect: "Credit",
         });
       }
@@ -455,8 +497,23 @@ export class StrategyBuilder {
         // Twisted Sister condition: credit >= wings → zero downside risk
         if (credit < ps.wingsWidth) continue;
 
+        // Max risk is on the upside (naked call) = theoretically unlimited,
+        // but capped when credit >= wings. Max downside risk = 0.
+        // For practical display: max loss on the put side = 0 (covered by credit).
+        // The "max risk" here is a nominal value for comparison.
         const maxRisk = round(call.strikePrice - credit);
         if (maxRisk <= 0) continue;
+
+        // BPE for Twisted Sister = short call strike + total credit (upside)
+        // On downside, no risk since credit >= wings
+        const bpe = round(call.strikePrice + credit);
+
+        // Position greeks:
+        //   BTO put (from spread): raw greeks (already in ps with position signs)
+        //   STO put (from spread): already negated in ps
+        //   STO call: negate call greeks
+        const positionDelta = round(ps.delta + (-call.delta));
+        const positionTheta = round(ps.theta + (-call.theta));
 
         results.push({
           strategy_name: "Twisted Sister",
@@ -472,10 +529,10 @@ export class StrategyBuilder {
           max_loss: maxRisk,
           rr_ratio: round(maxRisk / credit),
           pop: round(100 - call.absDelta * 100),
-          theta: round((ps.stoOption.theta - ps.btoOption.theta + call.theta) * 100),
-          delta: round((ps.stoOption.delta - ps.btoOption.delta + call.delta) * 100),
+          theta: positionTheta,
+          delta: positionDelta,
           wings: ps.wingsWidth,
-          bpe: maxRisk,
+          bpe,
           price_effect: "Credit",
         });
       }
@@ -501,6 +558,13 @@ export class StrategyBuilder {
       const debit = round(put.midPrice + call.midPrice);
       if (debit <= 0) continue;
 
+      // BPE for straddle: lower = strike - debit, upper = strike + debit
+      const bpeLower = round(put.strikePrice - debit);
+
+      // Position greeks: both legs are BTO (long), use raw greeks
+      const positionTheta = round(put.theta + call.theta);
+      const positionDelta = round(put.delta + call.delta);
+
       results.push({
         strategy_name: "Long Straddle",
         expiry_date: exp.expirationDate,
@@ -514,10 +578,10 @@ export class StrategyBuilder {
         max_loss: debit,
         rr_ratio: round(put.strikePrice / debit),
         pop: round((put.absDelta * 100 + call.absDelta * 100) / 2),
-        theta: round((put.theta + call.theta) * 100),
-        delta: round((put.delta + call.delta) * 100),
+        theta: positionTheta,
+        delta: positionDelta,
         wings: 0,
-        bpe: debit,
+        bpe: bpeLower,
         price_effect: "Debit",
       });
     }
@@ -540,6 +604,13 @@ export class StrategyBuilder {
 
         const width = round(call.strikePrice - put.strikePrice);
 
+        // BPE: lower = put strike - debit, upper = call strike + debit
+        const bpeLower = round(put.strikePrice - debit);
+
+        // Position greeks: both BTO, use raw greeks
+        const positionTheta = round(put.theta + call.theta);
+        const positionDelta = round(put.delta + call.delta);
+
         results.push({
           strategy_name: "Long Strangle",
           expiry_date: exp.expirationDate,
@@ -553,10 +624,10 @@ export class StrategyBuilder {
           max_loss: debit,
           rr_ratio: round(width / debit),
           pop: round((put.absDelta * 100 + call.absDelta * 100) / 2),
-          theta: round((put.theta + call.theta) * 100),
-          delta: round((put.delta + call.delta) * 100),
+          theta: positionTheta,
+          delta: positionDelta,
           wings: width,
-          bpe: debit,
+          bpe: bpeLower,
           price_effect: "Debit",
         });
       }
@@ -585,6 +656,14 @@ export class StrategyBuilder {
 
         const maxProfit = round(wingWidth - debit);
 
+        // BPE for bull call spread = lower strike + debit
+        const bpe = round(btoCall.strikePrice + debit);
+
+        // Position greeks: BTO lower call + STO upper call
+        // BTO: +btoCall.theta, STO: -stoCall.theta
+        const positionTheta = round(btoCall.theta - stoCall.theta);
+        const positionDelta = round(btoCall.delta - stoCall.delta);
+
         results.push({
           strategy_name: "Bull Call Spread",
           expiry_date: exp.expirationDate,
@@ -598,10 +677,10 @@ export class StrategyBuilder {
           max_loss: debit,
           rr_ratio: round(debit / maxProfit),
           pop: round(100 - btoCall.absDelta * 100),
-          theta: round((btoCall.theta - stoCall.theta) * 100),
-          delta: round((btoCall.delta - stoCall.delta) * 100),
+          theta: positionTheta,
+          delta: positionDelta,
           wings: wingWidth,
-          bpe: debit,
+          bpe,
           price_effect: "Debit",
         });
       }
@@ -630,6 +709,13 @@ export class StrategyBuilder {
 
         const maxProfit = round(wingWidth - debit);
 
+        // BPE for bear put spread = higher strike - debit
+        const bpe = round(btoPut.strikePrice - debit);
+
+        // Position greeks: BTO higher put + STO lower put
+        const positionTheta = round(btoPut.theta - stoPut.theta);
+        const positionDelta = round(btoPut.delta - stoPut.delta);
+
         results.push({
           strategy_name: "Bear Put Spread",
           expiry_date: exp.expirationDate,
@@ -643,10 +729,10 @@ export class StrategyBuilder {
           max_loss: debit,
           rr_ratio: round(debit / maxProfit),
           pop: round(100 - btoPut.absDelta * 100),
-          theta: round((btoPut.theta - stoPut.theta) * 100),
-          delta: round((btoPut.delta - stoPut.delta) * 100),
+          theta: positionTheta,
+          delta: positionDelta,
           wings: wingWidth,
-          bpe: debit,
+          bpe,
           price_effect: "Debit",
         });
       }
@@ -685,6 +771,13 @@ export class StrategyBuilder {
           const maxProfit = round(lowerWing - debit);
           const name = lowerWing !== upperWing ? "Broken Wing Call Butterfly" : "Call Butterfly";
 
+          // BPE: lower = lower strike + debit, upper = upper strike - debit
+          const bpe = round(btoLower.strikePrice + Math.abs(debit));
+
+          // Position greeks: BTO lower + 2×STO mid + BTO upper
+          const positionTheta = round(btoLower.theta - 2 * stoCall.theta + btoUpper.theta);
+          const positionDelta = round(btoLower.delta - 2 * stoCall.delta + btoUpper.delta);
+
           results.push({
             strategy_name: name,
             expiry_date: exp.expirationDate,
@@ -699,10 +792,10 @@ export class StrategyBuilder {
             max_loss: isCredit ? 0 : debit,
             rr_ratio: maxProfit > 0 ? round(Math.abs(debit) / maxProfit) : 0,
             pop: round(100 - stoCall.absDelta * 100),
-            theta: round((btoLower.theta - 2 * stoCall.theta + btoUpper.theta) * 100),
-            delta: round((btoLower.delta - 2 * stoCall.delta + btoUpper.delta) * 100),
+            theta: positionTheta,
+            delta: positionDelta,
             wings: lowerWing,
-            bpe: isCredit ? 0 : debit,
+            bpe,
             price_effect: isCredit ? "Credit" : "Debit",
           });
         }
@@ -741,6 +834,13 @@ export class StrategyBuilder {
           const maxProfit = round(lowerWing - debit);
           const name = lowerWing !== upperWing ? "Broken Wing Put Butterfly" : "Put Butterfly";
 
+          // BPE: lower = lower strike + debit
+          const bpe = round(btoLower.strikePrice + Math.abs(debit));
+
+          // Position greeks: BTO lower + 2×STO mid + BTO upper
+          const positionTheta = round(btoLower.theta - 2 * stoPut.theta + btoUpper.theta);
+          const positionDelta = round(btoLower.delta - 2 * stoPut.delta + btoUpper.delta);
+
           results.push({
             strategy_name: name,
             expiry_date: exp.expirationDate,
@@ -755,10 +855,10 @@ export class StrategyBuilder {
             max_loss: isCredit ? 0 : debit,
             rr_ratio: maxProfit > 0 ? round(Math.abs(debit) / maxProfit) : 0,
             pop: round(100 - stoPut.absDelta * 100),
-            theta: round((btoLower.theta - 2 * stoPut.theta + btoUpper.theta) * 100),
-            delta: round((btoLower.delta - 2 * stoPut.delta + btoUpper.delta) * 100),
+            theta: positionTheta,
+            delta: positionDelta,
             wings: lowerWing,
-            bpe: isCredit ? 0 : debit,
+            bpe,
             price_effect: isCredit ? "Credit" : "Debit",
           });
         }
@@ -838,6 +938,7 @@ export class StrategyBuilder {
     return results.sort((a, b) => b.absDelta - a.absDelta);
   }
 
+
   private _getOptionData(
     strike: ParsedStrike,
     exp: ParsedExpiration,
@@ -872,6 +973,17 @@ export class StrategyBuilder {
     return options.filter((o) => o.absDelta >= minD && o.absDelta <= maxD && o.midPrice > 0);
   }
 
+  /**
+   * Build credit spreads with CORRECT position greeks.
+   *
+   * For a credit spread:
+   *   STO leg (short): negate raw greeks → -stoOption.delta, -stoOption.theta
+   *   BTO leg (long):  use raw greeks  → +btoOption.delta, +btoOption.theta
+   *
+   * Result for put credit spread:
+   *   delta = -stoOption.delta + btoOption.delta  (should be positive/bullish)
+   *   theta = -stoOption.theta + btoOption.theta  (should be positive — time helps)
+   */
   private _buildCreditSpreads(
     options: OptionData[],
     allStrikes: ParsedStrike[],
@@ -920,14 +1032,18 @@ export class StrategyBuilder {
         const credit = round(stoOption.midPrice - btoMid);
         if (credit <= 0) continue;
 
+        const maxLoss = round(wingWidth - credit);
+
         spreads.push({
           stoOption,
           btoOption,
           wingsWidth: wingWidth,
           credit,
-          riskRewardRatio: round(wingWidth / credit),
-          delta: round(stoOption.delta + btoOption.delta),
-          theta: round(stoOption.theta + btoOption.theta),
+          // RR = maxLoss / credit (risk per $1 of max profit)
+          riskRewardRatio: round(maxLoss / credit),
+          // Position greeks: STO negated + BTO raw
+          delta: round(-stoOption.delta + btoOption.delta),
+          theta: round(-stoOption.theta + btoOption.theta),
           type,
         });
       }
