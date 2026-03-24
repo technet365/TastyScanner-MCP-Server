@@ -67,19 +67,23 @@ export interface StrategyFilterConfig {
   maxBidAskSpread: number; // percentage (default 5 = 5%)
   minDTE: number;          // 20
   maxDTE: number;          // 60
+  minPop: number;          // 70 — minimum probability of profit (%)
+  maxRiskReward: number;   // 4  — maximum risk/reward ratio
 }
 
 const DEFAULT_FILTERS: StrategyFilterConfig = {
   minDelta: 0.10,
-  maxDelta: 0.30,
+  maxDelta: 0.25,
   debitMinDelta: 0.30,
   debitMaxDelta: 0.50,
-  wings: [1, 2, 3, 5, 10],
+  wings: [5],
   condorsMinDelta: -5,
   condorsMaxDelta: 5,
-  maxBidAskSpread: 5,  // percentage — matches web app default (5%)
-  minDTE: 20,
-  maxDTE: 60,
+  maxBidAskSpread: 3,  // percentage — matches web app default (5%)
+  minDTE: 35,
+  maxDTE: 55,
+  minPop: 70,
+  maxRiskReward: 3,
 };
 
 // ---------------------------------------------------------------------------
@@ -257,10 +261,17 @@ export class StrategyBuilder {
       }
     }
 
-    allStrategies.sort((a, b) => a.rr_ratio - b.rr_ratio);
+    // Filter by POP and RR before sorting
+    const filtered = allStrategies.filter((s) => {
+      if (s.pop < this.filters.minPop) return false;
+      if (s.rr_ratio > this.filters.maxRiskReward) return false;
+      return true;
+    });
 
-    logger.info(`[StrategyBuilder] Found ${allStrategies.length} setups for ${symbol} (${strategyType})`);
-    return allStrategies;
+    filtered.sort((a, b) => a.rr_ratio - b.rr_ratio);
+
+    logger.info(`[StrategyBuilder] Found ${filtered.length} setups for ${symbol} (${strategyType}) [${allStrategies.length} before POP/RR filter]`);
+    return filtered;
   }
 
   // =========================================================================
