@@ -64,7 +64,7 @@ export interface StrategyFilterConfig {
   wings: number[];         // [1, 2, 3, 5, 10]
   condorsMinDelta: number; // -5
   condorsMaxDelta: number; // 5
-  maxBidAskSpread: number; // 0.50
+  maxBidAskSpread: number; // percentage (default 5 = 5%)
   minDTE: number;          // 20
   maxDTE: number;          // 60
 }
@@ -77,7 +77,7 @@ const DEFAULT_FILTERS: StrategyFilterConfig = {
   wings: [1, 2, 3, 5, 10],
   condorsMinDelta: -5,
   condorsMaxDelta: 5,
-  maxBidAskSpread: 0.50,
+  maxBidAskSpread: 5,  // percentage — matches web app default (5%)
   minDTE: 20,
   maxDTE: 60,
 };
@@ -932,7 +932,7 @@ export class StrategyBuilder {
         delta: greeks?.delta ?? 0,
         absDelta: Math.abs(greeks?.delta ?? 0),
         theta: greeks?.theta ?? 0,
-        bidAskSpread: round(askPrice - bidPrice),
+        bidAskSpread: bidAskSpreadPct(bidPrice, askPrice),
       });
     }
     return results.sort((a, b) => b.absDelta - a.absDelta);
@@ -965,7 +965,7 @@ export class StrategyBuilder {
       delta: greeks?.delta ?? 0,
       absDelta: Math.abs(greeks?.delta ?? 0),
       theta: greeks?.theta ?? 0,
-      bidAskSpread: round(ask - bid),
+      bidAskSpread: bidAskSpreadPct(bid, ask),
     };
   }
 
@@ -1009,7 +1009,7 @@ export class StrategyBuilder {
         if (btoMid <= 0) continue;
 
         const stoBAS = stoOption.bidAskSpread;
-        const btoBAS = round(btoAsk - btoBid);
+        const btoBAS = bidAskSpreadPct(btoBid, btoAsk);
         if (stoBAS > this.filters.maxBidAskSpread || btoBAS > this.filters.maxBidAskSpread) continue;
         if (stoBAS < 0 || btoBAS < 0) continue;
 
@@ -1111,6 +1111,16 @@ export class StrategyBuilder {
 function round(value: number, decimals = 2): number {
   const factor = Math.pow(10, decimals);
   return Math.round(value * factor) / factor;
+}
+
+/**
+ * Bid-ask spread as percentage — matches web app's OptionModel.bidAskSpread:
+ *   ((ask - bid) / bid) * 100
+ * Returns 999999 if bid is 0 (illiquid).
+ */
+function bidAskSpreadPct(bid: number, ask: number): number {
+  if (bid <= 0) return 999999;
+  return round(((ask - bid) / bid) * 100);
 }
 
 function groupBy<T>(arr: T[], keyFn: (item: T) => string): Record<string, T[]> {
