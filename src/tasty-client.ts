@@ -8,6 +8,7 @@
 import TastyTradeClient, { STREAMER_STATE, MarketDataSubscriptionType } from "@tastytrade/api";
 import { TastyConfig, ConnectionStatus } from "./types.js";
 import { logger } from "./logger.js";
+import { isMarketTrading, getMarketStatusDescription } from "./market-status.js";
 import {
   TastyAccountApiResponse,
   TastyHttpClientInternals,
@@ -120,6 +121,7 @@ export class TastyClient {
         connected: true,
         streamer_connected: this._streamerConnected,
         account_number: this.accountNumber,
+        market_status: getMarketStatusDescription(),
         error: null,
       };
     } catch (err: unknown) {
@@ -129,6 +131,7 @@ export class TastyClient {
         connected: false,
         streamer_connected: false,
         account_number: null,
+        market_status: getMarketStatusDescription(),
         error: extractErrorMessage(err),
       };
     }
@@ -175,6 +178,8 @@ export class TastyClient {
     logger.info("[TastyClient] Patched generateAccessToken with client_id (OAuth)");
   }
 
+  private _marketClosedCheckInterval: ReturnType<typeof setInterval> | null = null;
+
   private async _connectAccountStreamer(): Promise<void> {
     if (!this.client) return;
     try {
@@ -186,7 +191,18 @@ export class TastyClient {
       });
 
       this.client.accountStreamer.addStreamerStateObserver((state: STREAMER_STATE) => {
-        logger.info(`[AccountStreamer] state: ${STREAMER_STATE[state]}`);
+        const stateName = STREAMER_STATE[state] ?? String(state);
+        if (state === STREAMER_STATE.Closed || state === STREAMER_STATE.Error) {
+          if (!isMarketTrading()) {
+            logger.info(`[AccountStreamer] Disconnected — ${getMarketStatusDescription()}. Will reconnect when trading resumes.`);
+            this._streamerConnected = false;
+            this._waitForMarketOpen();
+          } else {
+            logger.warn(`[AccountStreamer] state: ${stateName} — market is open, will auto-reconnect on next API call`);
+          }
+        } else {
+          logger.info(`[AccountStreamer] state: ${stateName}`);
+        }
       });
 
       await this.client.accountStreamer.start();
@@ -196,6 +212,28 @@ export class TastyClient {
     } catch (err: unknown) {
       logger.warn("[TastyClient] Account streamer failed:", extractErrorMessage(err));
     }
+  }
+
+  /**
+   * When market is closed, poll every 60s until trading resumes, then reconnect.
+   */
+  private _waitForMarketOpen(): void {
+    if (this._marketClosedCheckInterval) return; // already waiting
+
+    this._marketClosedCheckInterval = setInterval(async () => {
+      if (isMarketTrading()) {
+        logger.info("[TastyClient] Market is now open — reconnecting...");
+        if (this._marketClosedCheckInterval) {
+          clearInterval(this._marketClosedCheckInterval);
+          this._marketClosedCheckInterval = null;
+        }
+        try {
+          await this.connect();
+        } catch (err: unknown) {
+          logger.error("[TastyClient] Market-open reconnect failed:", extractErrorMessage(err));
+        }
+      }
+    }, 60_000);
   }
 
   private async _connectQuoteStreamer(): Promise<void> {
@@ -312,6 +350,7 @@ export class TastyClient {
       connected: this._connected,
       streamer_connected: this._streamerConnected,
       account_number: this._connected ? this.accountNumber : null,
+      market_status: getMarketStatusDescription(),
       error: null,
     };
   }

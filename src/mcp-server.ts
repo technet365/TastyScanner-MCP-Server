@@ -81,17 +81,9 @@ const server = new McpServer({
 
 server.tool(
   "get_market_overview",
-  "Scans symbols and returns key metrics for premium-selling analysis. " +
-  "Each symbol includes: current price, IVR (Implied Volatility Rank 0-100 — how high current IV is vs 52-week range), " +
-  "IV (Implied Volatility Index — actual IV percentage), beta (correlation to SPY), " +
-  "and next earnings date. Results sorted by IVR descending — high IVR (>30) = best for selling premium.\n\n" +
-  "SYMBOL SOURCES (use one):\n" +
-  "• watchlist — name of a watchlist. Looks in personal watchlists first, then falls back to TastyTrade platform watchlists automatically.\n" +
-  "• symbols — explicit list of tickers\n" +
-  "• (none) — falls back to built-in default list (~40 popular symbols)\n\n" +
-  "WORKFLOW: Use get_watchlists() first to see your lists, then scan with watchlist='My Candidates'. " +
-  "If a personal watchlist by that name doesn't exist, the tool automatically checks TastyTrade's " +
-  "public platform watchlists (High Options Volume, High IVR, etc.).",
+  "Scan symbols for options trading metrics: price, IVR (0-100, higher=better for selling premium), IV, beta, earnings date. " +
+  "Sorted by IVR descending. Pass watchlist name, explicit symbols array, or omit for defaults (~40 popular tickers). " +
+  "Returns max 50 results.",
   {
     watchlist: z
       .string()
@@ -238,24 +230,10 @@ server.tool(
 
 server.tool(
   "get_strategies",
-  "Scans the options chain for a symbol and builds trading strategy setups. " +
-  "Supports 12 strategy types across credit and debit families:\n\n" +
-  "CREDIT STRATEGIES (sell premium, positive theta, profit from time decay):\n" +
-  "• iron_condor — 4 legs: put spread + call spread at different strikes. Neutral outlook, defined risk.\n" +
-  "• put_credit_spread — 2 legs: STO put + BTO put below. Bullish, profits if stock stays above short strike.\n" +
-  "• call_credit_spread — 2 legs: STO call + BTO call above. Bearish, profits if stock stays below short strike.\n" +
-  "• iron_butterfly — 4 legs: like iron condor but short strikes at same ATM price. Higher credit, tighter range.\n" +
-  "• jade_lizard — 3 legs: naked STO put + call credit spread. Zero upside risk when credit ≥ wings.\n" +
-  "• twisted_sister — 3 legs: naked STO call + put credit spread. Zero downside risk when credit ≥ wings.\n\n" +
-  "DEBIT STRATEGIES (buy premium, negative theta, profit from large moves or direction):\n" +
-  "• long_straddle — 2 legs: BTO put + BTO call at same strike. Profits from big move in either direction.\n" +
-  "• long_strangle — 2 legs: BTO put + BTO call at different OTM strikes. Cheaper than straddle, needs bigger move.\n" +
-  "• bull_call_spread — 2 legs: BTO call + STO call above. Bullish directional, defined risk.\n" +
-  "• bear_put_spread — 2 legs: BTO put + STO put below. Bearish directional, defined risk.\n" +
-  "• call_butterfly — 3 legs: BTO lower + 2×STO mid + BTO upper (calls). Profits if stock pins near short strike.\n" +
-  "• put_butterfly — 3 legs: BTO lower + 2×STO mid + BTO upper (puts). Profits if stock pins near short strike.\n\n" +
-  "Results sorted by risk/reward ratio (lower = better). " +
-  "Use strategy_type='all' to scan everything, or pick a specific type.",
+  "Build options strategy setups for a symbol. Returns top results sorted by risk/reward ratio.\n" +
+  "CREDIT (sell premium): iron_condor, put_credit_spread, call_credit_spread, iron_butterfly, jade_lizard, twisted_sister\n" +
+  "DEBIT (buy premium): long_straddle, long_strangle, bull_call_spread, bear_put_spread, call_butterfly, put_butterfly\n" +
+  "Each result has: legs, credit/debit, max_loss, rr_ratio, pop%, theta, delta, wings, bpe. Default max 20 results.",
   {
     symbol: z.string().describe("Ticker symbol (e.g. 'SPY', 'AAPL', 'TSLA')"),
     strategy_type: z
@@ -275,10 +253,11 @@ server.tool(
     max_delta: z.number().optional().describe("Max delta for credit strategy short strikes (default: 0.30)"),
     debit_min_delta: z.number().optional().describe("Min delta for debit strategy long strikes (default: 0.30)"),
     debit_max_delta: z.number().optional().describe("Max delta for debit strategy long strikes (default: 0.50)"),
-    wings: z.array(z.number()).optional().describe("Wing widths to test in dollars (default: [1,2,3,5,10])"),
-    max_results: z.number().optional().describe("Limit number of results returned (default: 20)"),
+    wings: z.array(z.number()).optional().describe("Wing widths in dollars (default: [1,2,3,5,10])"),
+    max_results: z.number().optional().describe("Max results returned (default: 20, max: 50)"),
+    max_loss: z.number().optional().describe("Max loss per contract in $ (e.g. 500). Filters out riskier setups."),
   },
-  async ({ symbol, strategy_type, min_dte, max_dte, min_delta, max_delta, debit_min_delta, debit_max_delta, wings, max_results }) => {
+  async ({ symbol, strategy_type, min_dte, max_dte, min_delta, max_delta, debit_min_delta, debit_max_delta, wings, max_results, max_loss }) => {
     const stype = (strategy_type ?? "all") as StrategyType;
     logger.info("[Tool] get_strategies called", { symbol, strategy_type: stype, min_dte, max_dte });
 
@@ -297,14 +276,29 @@ server.tool(
         ...(wings !== undefined && { wings }),
       });
 
-      const strategies = await builder.buildStrategies(symbol.toUpperCase(), stype);
-      const limited = strategies.slice(0, max_results ?? 20);
+      let strategies = await builder.buildStrategies(symbol.toUpperCase(), stype);
+
+      // Apply max_loss filter if provided
+      if (max_loss !== undefined && max_loss > 0) {
+        strategies = strategies.filter(s => s.max_loss <= max_loss);
+      }
+
+      const cap = Math.min(max_results ?? 20, 50);
+      const limited = strategies.slice(0, cap);
+
+      logger.info(`[Tool] get_strategies: ${strategies.length} total → returning ${limited.length} (cap ${cap})`);
 
       return {
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify(limited, null, 2),
+            text: JSON.stringify({
+              symbol: symbol.toUpperCase(),
+              strategy_type: stype,
+              total_found: strategies.length,
+              returned: limited.length,
+              strategies: limited,
+            }, null, 2),
           },
         ],
       };
@@ -320,12 +314,7 @@ server.tool(
 
 server.tool(
   "get_positions",
-  "Returns all current open positions from the TastyTrade account. " +
-  "Each position includes: underlying symbol, detected strategy type (Iron Condor, Put Credit Spread, etc.), " +
-  "individual legs with strikes/expiries/quantities, entry credit or debit, current market value, " +
-  "unrealized P&L in dollars and percentage, days to expiration, and open timestamp. " +
-  "Strategy detection is automatic based on leg structure. " +
-  "Use this before close_position() to see what needs managing.",
+  "Returns all open positions. Each has: symbol, detected strategy type, legs (strike/expiry/qty), entry price, current value, P&L ($, %), DTE.",
   {},
   async () => {
     logger.info("[Tool] get_positions called");
@@ -392,12 +381,8 @@ server.tool(
 
 server.tool(
   "execute_trade",
-  "Places an options order on TastyTrade. ⚠️ EXECUTES REAL TRADES WITH REAL MONEY. " +
-  "Requires ENABLE_LIVE_TRADING=true in environment. " +
-  "Accepts multi-leg orders (spreads, condors, butterflies). Each leg needs an OCC option symbol " +
-  "(e.g. 'SPY   260417P00560000'), action (Buy/Sell to Open/Close), and quantity. " +
-  "Always use order_type='Limit' with a specific limit_price — never market orders on options. " +
-  "After placing, use get_working_orders() to monitor fill status and adjust_order() if not filling.",
+  "⚠️ REAL MONEY. Places an options order. Requires ENABLE_LIVE_TRADING=true. " +
+  "Pass legs with OCC symbols, limit_price, price_effect (Credit/Debit). Always use Limit orders.",
   {
     symbol: z.string().describe("Underlying symbol (e.g. 'SPY')"),
     legs: z
@@ -476,10 +461,7 @@ server.tool(
 
 server.tool(
   "close_position",
-  "Provides instructions to close an existing position safely. " +
-  "Does NOT auto-execute — returns the inverse legs and recommended limit price. " +
-  "The AI agent should review the output, then call execute_trade() with the inverse legs. " +
-  "This two-step approach prevents accidental closures.",
+  "Returns instructions to close a position (does NOT auto-execute). Shows inverse legs and recommended price. You must then call execute_trade() yourself.",
   {
     position_id: z.string().describe("Position ID to close (from get_positions)"),
     reason: z
@@ -535,11 +517,7 @@ server.tool(
 
 server.tool(
   "adjust_order",
-  "Adjusts a working order's price to improve fill probability. " +
-  "Uses the same auto-replace logic as TastyScanner UI: " +
-  "credit orders get cheaper by one tick, debit orders get more expensive by one tick. " +
-  "Tick size depends on the option price: $0.01 for prices < $3, $0.05 for prices ≥ $3. " +
-  "Max adjustments: 4 (for $0.01 tick), 2 (for $0.02 tick), 1 (for $0.05 tick).",
+  "Adjust a working order's price to improve fill. 'improve_fill' moves price by one tick toward fill (credit→cheaper, debit→pricier). 'custom' sets exact price. Requires ENABLE_LIVE_TRADING=true.",
   {
     order_id: z.number().int().describe("Working order ID (from get_working_orders or execute_trade response)"),
     adjustment: z
@@ -711,10 +689,7 @@ server.tool(
 
 server.tool(
   "get_account_info",
-  "Returns TastyTrade account balance and buying power details: " +
-  "cash balance, net liquidating value, derivative (options) buying power, " +
-  "stock buying power, maintenance requirement, and pending cash. " +
-  "Use this to check available capital before placing trades with execute_trade().",
+  "Returns account balance: cash, net liquidating value, options buying power, stock buying power. Check before trading.",
   {},
   async () => {
     logger.info("[Tool] get_account_info called");
@@ -745,10 +720,7 @@ server.tool(
 
 server.tool(
   "get_connection_status",
-  "Returns TastyTrade connection health: whether authenticated, " +
-  "whether the DxLink quote streamer is active (needed for real-time data in get_strategies), " +
-  "and the connected account number. Call this first to verify the MCP server is operational " +
-  "before using any other tools.",
+  "Check if TastyTrade is connected, streamer is active, and market status (open/closed). Call first to verify server is operational.",
   {},
   async () => {
     const status = tastyClient.getStatus();
@@ -769,14 +741,7 @@ server.tool(
 
 server.tool(
   "get_watchlists",
-  "Returns all available watchlists — both your personal TastyTrade watchlists " +
-  "and TastyTrade's platform watchlists (High Options Volume, High IVR, etc.). " +
-  "Personal watchlists can be managed with manage_watchlist(). " +
-  "Use the watchlist names as input to get_market_overview(watchlist='...') to scan them.\n\n" +
-  "WORKFLOW:\n" +
-  "1. get_watchlists() → see what's available\n" +
-  "2. get_market_overview(watchlist='My Candidates') → scan a specific watchlist\n" +
-  "3. manage_watchlist(action='add', ...) → add promising symbols to your list",
+  "Returns personal + platform watchlists. Use names as input to get_market_overview(watchlist='...'). Manage with manage_watchlist().",
   {
     include_public: z
       .boolean()
@@ -832,14 +797,7 @@ server.tool(
 
 server.tool(
   "manage_watchlist",
-  "Manages your personal TastyTrade watchlists. Actions:\n\n" +
-  "• create — Create a new watchlist with given symbols. Use this to build a curated list of candidates.\n" +
-  "• add — Add symbols to an existing watchlist. Use after scanning market to save good candidates.\n" +
-  "• remove — Remove symbols from a watchlist. Use to clean out positions you've closed or symbols with poor metrics.\n" +
-  "• delete — Delete an entire watchlist.\n\n" +
-  "WORKFLOW: After scanning with get_market_overview(), add high-IVR symbols to your watchlist. " +
-  "Periodically clean out symbols that no longer meet criteria. " +
-  "Then use get_strategies(symbol) on each watchlist member to find trades.",
+  "Manage personal watchlists. Actions: create (new list), add (symbols to list), remove (symbols from list), delete (entire list).",
   {
     action: z
       .enum(["create", "add", "remove", "delete"])

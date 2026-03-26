@@ -141,6 +141,7 @@ export interface ConnectionStatus {
   connected: boolean;
   streamer_connected: boolean;
   account_number: string | null;
+  market_status: string;
   error: string | null;
 }
 
