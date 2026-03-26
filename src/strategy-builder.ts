@@ -32,6 +32,11 @@
 import { TastyClient } from "./tasty-client.js";
 import { StrategySetup, StrategyLeg } from "./types.js";
 import { logger } from "./logger.js";
+import {
+  TastyChainApiResponse,
+  TastyExpirationApiResponse,
+  TastyStrikeApiResponse,
+} from "./tasty-api-types.js";
 
 // ---------------------------------------------------------------------------
 // Strategy type enum — matches what DeerFlow can request
@@ -882,27 +887,27 @@ export class StrategyBuilder {
   // Infrastructure — parsing, filtering, spreads
   // =========================================================================
 
-  private _parseChain(rawChain: any): ParsedExpiration[] {
+  private _parseChain(rawChain: TastyChainApiResponse | TastyChainApiResponse[]): ParsedExpiration[] {
     // SDK returns an ARRAY of chain objects, each with .expirations
     // (see main app: tasty-market-data-provider.ts → getOptionsChain)
-    const chainArray: any[] = Array.isArray(rawChain) ? rawChain : [rawChain];
+    const chainArray: TastyChainApiResponse[] = Array.isArray(rawChain) ? rawChain : [rawChain];
 
     const allExpirations: ParsedExpiration[] = [];
 
     for (const chain of chainArray) {
-      const expirations: any[] = chain?.expirations ?? chain?.data?.items ?? [];
+      const expirations: TastyExpirationApiResponse[] = chain?.expirations ?? [];
       if (!Array.isArray(expirations)) continue;
 
       for (const exp of expirations) {
-        const rawStrikes = exp?.strikes ?? exp?.["strikes"] ?? [];
+        const rawStrikes = exp?.strikes ?? [];
         if (!Array.isArray(rawStrikes) || rawStrikes.length === 0) continue;
 
-        const strikes = rawStrikes.map((s: any) => ({
-          strikePrice: parseFloat(s["strike-price"] ?? s.strikePrice ?? "0"),
-          callSymbol: s.call ?? s.callId ?? "",
-          putSymbol: s.put ?? s.putId ?? "",
-          callStreamer: s["call-streamer-symbol"] ?? s.callStreamerSymbol ?? s.call ?? "",
-          putStreamer: s["put-streamer-symbol"] ?? s.putStreamerSymbol ?? s.put ?? "",
+        const strikes = rawStrikes.map((s: TastyStrikeApiResponse) => ({
+          strikePrice: parseFloat(s["strike-price"] ?? "0"),
+          callSymbol: s.call ?? "",
+          putSymbol: s.put ?? "",
+          callStreamer: s["call-streamer-symbol"] ?? s.call ?? "",
+          putStreamer: s["put-streamer-symbol"] ?? s.put ?? "",
         }));
 
         allExpirations.push({

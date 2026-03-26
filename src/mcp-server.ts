@@ -21,6 +21,13 @@ import {
   makeError,
 } from "./types.js";
 import { logger } from "./logger.js";
+import {
+  TastyOrderApiResponse,
+  TastyWatchlistApiResponse,
+  TastyWatchlistEntryApiResponse,
+  TastyPositionApiResponse,
+  extractErrorMessage,
+} from "./tasty-api-types.js";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -126,7 +133,7 @@ server.tool(
         resolvedSource = "custom";
       } else if (watchlist) {
         // Try personal watchlist first
-        let wl: any = null;
+        let wl: TastyWatchlistApiResponse | null = null;
         let sourceType = "personal";
 
         try {
@@ -136,7 +143,7 @@ server.tool(
         }
 
         let entries = wl?.["watchlist-entries"] ?? wl?.entries ?? [];
-        let wlSymbols = entries.map((e: any) => e.symbol ?? e).filter(Boolean);
+        let wlSymbols = entries.map((e: TastyWatchlistEntryApiResponse) => e.symbol ?? e).filter(Boolean);
 
         // Fallback to public watchlist if personal is empty or not found
         if (wlSymbols.length === 0) {
@@ -145,11 +152,11 @@ server.tool(
           try {
             const publicWatchlists = await tastyClient.getPublicWatchlists();
             const match = (Array.isArray(publicWatchlists) ? publicWatchlists : [])
-              .find((pw: any) => (pw.name ?? "").toLowerCase() === watchlist.toLowerCase());
+              .find((pw: TastyWatchlistApiResponse) => (pw.name ?? "").toLowerCase() === watchlist.toLowerCase());
 
             if (match) {
               entries = match["watchlist-entries"] ?? match.entries ?? [];
-              wlSymbols = entries.map((e: any) => e.symbol ?? e).filter(Boolean);
+              wlSymbols = entries.map((e: TastyWatchlistEntryApiResponse) => e.symbol ?? e).filter(Boolean);
             }
           } catch {
             // Public lookup also failed
@@ -217,8 +224,8 @@ server.tool(
           },
         ],
       };
-    } catch (err: any) {
-      return errorResult("FETCH_FAILED", `Failed to fetch market data: ${err.message}`);
+    } catch (err: unknown) {
+      return errorResult("FETCH_FAILED", `Failed to fetch market data: ${extractErrorMessage(err)}`);
     }
   },
 );
@@ -299,8 +306,8 @@ server.tool(
           },
         ],
       };
-    } catch (err: any) {
-      return errorResult("STRATEGY_BUILD_FAILED", `Failed to build strategies for ${symbol}: ${err.message}`);
+    } catch (err: unknown) {
+      return errorResult("STRATEGY_BUILD_FAILED", `Failed to build strategies for ${symbol}: ${extractErrorMessage(err)}`);
     }
   },
 );
@@ -328,8 +335,8 @@ server.tool(
     try {
       const rawPositions = await tastyClient.getActivePositions();
 
-      const positions: Position[] = rawPositions.map((pos: any) => {
-        const legs: PositionLeg[] = (pos.legs ?? [pos]).map((leg: any) => ({
+      const positions: Position[] = rawPositions.map((pos: TastyPositionApiResponse) => {
+        const legs: PositionLeg[] = (pos.legs ?? [pos]).map((leg: TastyPositionApiResponse) => ({
           type: leg["instrument-type"] ?? leg.instrumentType ?? "Equity Option",
           strike: leg["strike-price"] ?? leg.strikePrice ?? null,
           expiry: leg["expiration-date"] ?? leg.expirationDate ?? null,
@@ -370,8 +377,8 @@ server.tool(
           },
         ],
       };
-    } catch (err: any) {
-      return errorResult("POSITIONS_FAILED", `Failed to fetch positions: ${err.message}`);
+    } catch (err: unknown) {
+      return errorResult("POSITIONS_FAILED", `Failed to fetch positions: ${extractErrorMessage(err)}`);
     }
   },
 );
@@ -454,8 +461,8 @@ server.tool(
           },
         ],
       };
-    } catch (err: any) {
-      return errorResult("ORDER_FAILED", `Failed to place order: ${err.message}`);
+    } catch (err: unknown) {
+      return errorResult("ORDER_FAILED", `Failed to place order: ${extractErrorMessage(err)}`);
     }
   },
 );
@@ -513,8 +520,8 @@ server.tool(
           },
         ],
       };
-    } catch (err: any) {
-      return errorResult("CLOSE_FAILED", `Failed to analyze position: ${err.message}`);
+    } catch (err: unknown) {
+      return errorResult("CLOSE_FAILED", `Failed to analyze position: ${extractErrorMessage(err)}`);
     }
   },
 );
@@ -557,12 +564,12 @@ server.tool(
     try {
       // Fetch the live order to get current price and legs
       const liveOrders = await tastyClient.getLiveOrders();
-      const rawOrders = Array.isArray(liveOrders)
+      const rawOrders: TastyOrderApiResponse[] = Array.isArray(liveOrders)
         ? liveOrders
-        : (liveOrders as any)?.data?.items ?? [];
+        : [];
 
       const order = rawOrders.find(
-        (o: any) => o.id === order_id || o["id"] === order_id,
+        (o: TastyOrderApiResponse) => o.id === order_id || o["id"] === order_id,
       );
 
       if (!order) {
@@ -606,7 +613,7 @@ server.tool(
         "time-in-force": timeInForce,
         "price": newPrice,
         "price-effect": priceEffect,
-        "legs": legs.map((leg: any) => ({
+        "legs": legs.map((leg: TastyPositionApiResponse) => ({
           "action": leg.action ?? leg["action"],
           "instrument-type": leg["instrument-type"] ?? leg.instrumentType ?? "Equity Option",
           "quantity": leg.quantity ?? leg["quantity"],
@@ -635,8 +642,8 @@ server.tool(
           },
         ],
       };
-    } catch (err: any) {
-      return errorResult("ADJUST_FAILED", `Failed to adjust order: ${err.message}`);
+    } catch (err: unknown) {
+      return errorResult("ADJUST_FAILED", `Failed to adjust order: ${extractErrorMessage(err)}`);
     }
   },
 );
@@ -660,11 +667,11 @@ server.tool(
 
     try {
       const orders = await tastyClient.getLiveOrders();
-      const rawOrders = Array.isArray(orders)
+      const rawOrders: TastyOrderApiResponse[] = Array.isArray(orders)
         ? orders
-        : (orders as any)?.data?.items ?? [];
+        : [];
 
-      const formatted = rawOrders.map((o: any) => ({
+      const formatted = rawOrders.map((o: TastyOrderApiResponse) => ({
         order_id: o.id ?? o["id"],
         symbol: o["underlying-symbol"] ?? o.underlyingSymbol ?? "",
         status: o.status ?? "",
@@ -673,7 +680,7 @@ server.tool(
         order_type: o["order-type"] ?? o.orderType ?? "",
         time_in_force: o["time-in-force"] ?? o.timeInForce ?? "",
         received_at: o["received-at"] ?? o.receivedAt ?? "",
-        legs: (o.legs ?? []).map((leg: any) => ({
+        legs: (o.legs ?? []).map((leg: TastyPositionApiResponse) => ({
           action: leg.action ?? leg["action"],
           symbol: leg.symbol ?? leg["symbol"],
           quantity: leg.quantity ?? leg["quantity"],
@@ -689,8 +696,8 @@ server.tool(
           },
         ],
       };
-    } catch (err: any) {
-      return errorResult("ORDERS_FAILED", `Failed to fetch working orders: ${err.message}`);
+    } catch (err: unknown) {
+      return errorResult("ORDERS_FAILED", `Failed to fetch working orders: ${extractErrorMessage(err)}`);
     }
   },
 );
@@ -723,8 +730,8 @@ server.tool(
           },
         ],
       };
-    } catch (err: any) {
-      return errorResult("BALANCE_FAILED", `Failed to fetch account balance: ${err.message}`);
+    } catch (err: unknown) {
+      return errorResult("BALANCE_FAILED", `Failed to fetch account balance: ${extractErrorMessage(err)}`);
     }
   },
 );
@@ -783,16 +790,16 @@ server.tool(
     try {
       const userWatchlists = await tastyClient.getUserWatchlists();
 
-      const userFormatted = (Array.isArray(userWatchlists) ? userWatchlists : []).map((wl: any) => ({
+      const userFormatted = (Array.isArray(userWatchlists) ? userWatchlists : []).map((wl: TastyWatchlistApiResponse) => ({
         name: wl.name ?? wl["name"] ?? "",
         type: "personal" as const,
-        symbols: (wl["watchlist-entries"] ?? wl.entries ?? []).map((e: any) => e.symbol ?? e),
+        symbols: (wl["watchlist-entries"] ?? wl.entries ?? []).map((e: TastyWatchlistEntryApiResponse) => e.symbol ?? e),
       }));
 
-      let publicFormatted: any[] = [];
+      let publicFormatted: { name: string; type: string; symbols: string[] }[] = [];
       if (include_public !== false) {
         const publicWatchlists = await tastyClient.getPublicWatchlists();
-        publicFormatted = (Array.isArray(publicWatchlists) ? publicWatchlists : []).map((wl: any) => ({
+        publicFormatted = (Array.isArray(publicWatchlists) ? publicWatchlists : []).map((wl: TastyWatchlistApiResponse) => ({
           name: wl.name ?? wl["name"] ?? "",
           type: "platform" as const,
           symbol_count: (wl["watchlist-entries"] ?? wl.entries ?? []).length,
@@ -810,8 +817,8 @@ server.tool(
           },
         ],
       };
-    } catch (err: any) {
-      return errorResult("WATCHLIST_FAILED", `Failed to fetch watchlists: ${err.message}`);
+    } catch (err: unknown) {
+      return errorResult("WATCHLIST_FAILED", `Failed to fetch watchlists: ${extractErrorMessage(err)}`);
     }
   },
 );
@@ -869,8 +876,8 @@ server.tool(
           }
           // Get current watchlist, merge, replace
           const current = await tastyClient.getWatchlist(name);
-          const currentEntries: any[] = current?.["watchlist-entries"] ?? current?.entries ?? [];
-          const currentSymbols = new Set(currentEntries.map((e: any) => (e.symbol ?? e).toUpperCase()));
+          const currentEntries: TastyWatchlistEntryApiResponse[] = current?.["watchlist-entries"] ?? current?.entries ?? [];
+          const currentSymbols = new Set(currentEntries.map((e: TastyWatchlistEntryApiResponse) => (e.symbol ?? e).toUpperCase()));
           const newSymbols = symbols.filter((s) => !currentSymbols.has(s.toUpperCase()));
 
           if (newSymbols.length === 0) {
@@ -896,10 +903,10 @@ server.tool(
             return errorResult("MISSING_SYMBOLS", "Provide symbols to remove.");
           }
           const current = await tastyClient.getWatchlist(name);
-          const currentEntries: any[] = current?.["watchlist-entries"] ?? current?.entries ?? [];
+          const currentEntries: TastyWatchlistEntryApiResponse[] = current?.["watchlist-entries"] ?? current?.entries ?? [];
           const toRemove = new Set(symbols.map((s) => s.toUpperCase()));
           const filtered = currentEntries.filter(
-            (e: any) => !toRemove.has((e.symbol ?? e).toUpperCase()),
+            (e: TastyWatchlistEntryApiResponse) => !toRemove.has((e.symbol ?? e).toUpperCase()),
           );
 
           await tastyClient.replaceWatchlist(name, {
@@ -920,8 +927,8 @@ server.tool(
         default:
           return errorResult("INVALID_ACTION", `Unknown action: ${action}`);
       }
-    } catch (err: any) {
-      return errorResult("WATCHLIST_FAILED", `Failed to ${action} watchlist: ${err.message}`);
+    } catch (err: unknown) {
+      return errorResult("WATCHLIST_FAILED", `Failed to ${action} watchlist: ${extractErrorMessage(err)}`);
     }
   },
 );
@@ -1138,10 +1145,10 @@ async function main() {
       }
 
       await transport.handleRequest(req, res, req.body);
-    } catch (err: any) {
-      logger.error("[MCP] POST /mcp error:", err.message);
+    } catch (err: unknown) {
+      logger.error("[MCP] POST /mcp error:", extractErrorMessage(err));
       if (!res.headersSent) {
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ error: extractErrorMessage(err) });
       }
     }
   });
