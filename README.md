@@ -128,10 +128,9 @@ Returns: {order_id, status, pnl_realized, message}
 cd tastyscanner-mcp
 npm install
 
-# Set env vars
-export TASTY_USERNAME=your_email
-export TASTY_PASSWORD=your_password
-export TASTY_ACCOUNT=5WT12345  # optional
+# Copy env template and fill in credentials
+cp .env.example .env
+# Edit .env with your OAuth credentials
 
 # Run with hot-reload
 npm run dev
@@ -144,9 +143,10 @@ npm start
 ### Test with curl
 
 ```bash
-# Initialize MCP session
+# Initialize MCP session (add -H "Authorization: Bearer <token>" if MCP_AUTH_TOKEN is set)
 curl -X POST http://localhost:7698/mcp \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-auth-token" \
   -d '{
     "jsonrpc": "2.0",
     "id": 1,
@@ -161,6 +161,7 @@ curl -X POST http://localhost:7698/mcp \
 # Call a tool (use session-id from init response)
 curl -X POST http://localhost:7698/mcp \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-auth-token" \
   -H "mcp-session-id: <session-id>" \
   -d '{
     "jsonrpc": "2.0",
@@ -177,12 +178,15 @@ curl -X POST http://localhost:7698/mcp \
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `TASTY_USERNAME` | Yes | — | TastyTrade login email |
-| `TASTY_PASSWORD` | Yes | — | TastyTrade password |
+| `TASTY_CLIENT_ID` | Yes | — | TastyTrade OAuth Client ID |
+| `TASTY_CLIENT_SECRET` | Yes | — | TastyTrade OAuth Client Secret |
+| `TASTY_REFRESH_TOKEN` | Yes | — | TastyTrade OAuth Refresh Token |
 | `TASTY_ACCOUNT` | No | auto | Account number (auto-detects first) |
 | `TASTY_PRODUCTION` | No | `true` | `true` = production, `false` = sandbox |
 | `MCP_PORT` | No | `7698` | HTTP server port |
+| `MCP_AUTH_TOKEN` | No | — | Bearer token for endpoint auth. If set, all `/mcp` requests require `Authorization: Bearer <token>` |
 | `LOG_LEVEL` | No | `info` | `debug`, `info`, `warn`, `error` |
+| `ENABLE_LIVE_TRADING` | No | `false` | Set `true` to allow `execute_trade` and `adjust_order` |
 
 ## How It Relates to TastyScanner
 
@@ -203,7 +207,11 @@ plain TypeScript functions suitable for server-side use.
 
 ## Security Notes
 
-- MCP server runs on internal Docker network only — **do not expose port 7698 to the internet**
-- Credentials are passed via environment variables, never hardcoded
-- The `execute_trade` tool places real orders — DeerFlow should implement confirmation gates
-- No authentication on the MCP endpoint itself (relies on network isolation)
+- **Authentication**: Set `MCP_AUTH_TOKEN` in `.env` to require Bearer token auth on all `/mcp` endpoints. Without it, the server is open (backwards compatible but not recommended for production).
+- **Rate limiting**: 120 requests/minute per IP on MCP endpoints.
+- **CORS**: Restricted to `MCP_CORS_ORIGIN` (default `http://localhost:3333`).
+- Credentials are passed via environment variables, never hardcoded.
+- `execute_trade` and `adjust_order` require `ENABLE_LIVE_TRADING=true` — disabled by default.
+- Session IDs use `crypto.randomUUID()` (cryptographically secure).
+- Account numbers are masked in logs (last 4 digits only).
+- **Do not expose port 7698 to the internet** without auth enabled.

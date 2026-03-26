@@ -26,6 +26,7 @@ services:
       - TASTY_PRODUCTION=${TASTY_PRODUCTION:-true}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - ENABLE_LIVE_TRADING=${ENABLE_LIVE_TRADING:-false}
+      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:-}
     ports:
       - "7698:7698"
     networks:

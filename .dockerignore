@@ -2,6 +2,10 @@ node_modules
 dist
 *.log
 .env
+.env.*
+!.env.example
 .git
+.DS_Store
 examples
 README.md
+docker-compose*.yml

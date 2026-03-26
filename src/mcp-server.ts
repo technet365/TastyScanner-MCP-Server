@@ -5,7 +5,8 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import express from "express";
+import express, { Request, Response, NextFunction } from "express";
+import crypto from "crypto";
 import { z } from "zod";
 
 import { TastyClient } from "./tasty-client.js";
@@ -32,6 +33,7 @@ const TASTY_REFRESH_TOKEN = process.env.TASTY_REFRESH_TOKEN ?? "";
 const TASTY_ACCOUNT = process.env.TASTY_ACCOUNT ?? "";
 const TASTY_PRODUCTION = (process.env.TASTY_PRODUCTION ?? "true") === "true";
 const ENABLE_LIVE_TRADING = (process.env.ENABLE_LIVE_TRADING ?? "false") === "true";
+const MCP_AUTH_TOKEN = process.env.MCP_AUTH_TOKEN ?? "";
 
 const DEFAULT_SYMBOLS = [
   "SPY", "QQQ", "IWM", "TLT", "GLD", "SLV", "EEM", "XLE", "XLF", "SMH",
@@ -1006,7 +1008,11 @@ async function main() {
   if (TASTY_CLIENT_ID && TASTY_CLIENT_SECRET && TASTY_REFRESH_TOKEN) {
     logger.info("Connecting to TastyTrade (OAuth)...");
     const status = await tastyClient.connect();
-    logger.info("Connection status:", status);
+    logger.info(`Connection: ${status.connected ? "OK" : "FAILED"}${status.error ? " — " + status.error : ""}`);
+    if (status.connected) {
+      logger.info(`  Streamer: ${status.streamer_connected ? "OK" : "NOT CONNECTED"}`);
+      logger.info(`  Account: ***${(status.account_number ?? "").slice(-4)}`);
+    }
   } else {
     logger.warn(
       "TASTY_CLIENT_ID / TASTY_CLIENT_SECRET / TASTY_REFRESH_TOKEN not set — running in disconnected mode. " +
@@ -1018,20 +1024,88 @@ async function main() {
   const app = express();
   app.use(express.json());
 
-  // Health check
+  // CORS — restrict to same-origin or configured origins
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader("Access-Control-Allow-Origin", process.env.MCP_CORS_ORIGIN ?? "http://localhost:3333");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, mcp-session-id");
+    if (_req.method === "OPTIONS") {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
+
+  // Bearer token auth middleware (skip health check)
+  const authMiddleware = (req: Request, res: Response, next: NextFunction) => {
+    if (!MCP_AUTH_TOKEN) {
+      // No token configured — allow all (backwards compatible)
+      next();
+      return;
+    }
+
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      res.status(401).json({ error: "Missing or invalid Authorization header. Expected: Bearer <token>" });
+      return;
+    }
+
+    const token = authHeader.slice(7);
+    // Constant-time comparison to prevent timing attacks
+    if (!crypto.timingSafeEqual(Buffer.from(token), Buffer.from(MCP_AUTH_TOKEN))) {
+      logger.warn(`[Auth] Invalid token from ${req.ip}`);
+      res.status(403).json({ error: "Invalid authentication token" });
+      return;
+    }
+
+    next();
+  };
+
+  // Simple rate limiter — max requests per IP per window
+  const RATE_LIMIT_WINDOW_MS = 60_000;
+  const RATE_LIMIT_MAX = 120;
+  const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+
+  const rateLimitMiddleware = (req: Request, res: Response, next: NextFunction) => {
+    const ip = req.ip ?? "unknown";
+    const now = Date.now();
+    let entry = rateLimitMap.get(ip);
+
+    if (!entry || now > entry.resetAt) {
+      entry = { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS };
+      rateLimitMap.set(ip, entry);
+    }
+
+    entry.count++;
+
+    if (entry.count > RATE_LIMIT_MAX) {
+      res.status(429).json({ error: "Rate limit exceeded. Try again later." });
+      return;
+    }
+
+    next();
+  };
+
+  // Health check — no auth required
   app.get("/health", (_req, res) => {
     const status = tastyClient.getStatus();
     res.json({
       service: "tastyscanner-mcp",
       version: "1.0.0",
+      auth_enabled: !!MCP_AUTH_TOKEN,
+      live_trading: ENABLE_LIVE_TRADING,
       ...status,
     });
   });
+
+  // Apply auth + rate limiting to MCP endpoints
+  app.use("/mcp", authMiddleware, rateLimitMiddleware);
 
   // --- Streamable HTTP transport (modern MCP) ---
   // This is the preferred transport for DeerFlow
 
   const activeSessions = new Map<string, StreamableHTTPServerTransport>();
+  const transportSessionIds = new WeakMap<StreamableHTTPServerTransport, string>();
 
   app.post("/mcp", async (req, res) => {
     try {
@@ -1042,17 +1116,18 @@ async function main() {
       if (sessionId && activeSessions.has(sessionId)) {
         transport = activeSessions.get(sessionId)!;
       } else {
-        // New session
+        // New session — use cryptographically random session ID
         transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: () => `tasty-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          sessionIdGenerator: () => crypto.randomUUID(),
           onsessioninitialized: (sid) => {
             activeSessions.set(sid, transport);
+            transportSessionIds.set(transport, sid);
             logger.info(`[MCP] New session: ${sid}`);
           },
         });
 
         transport.onclose = () => {
-          const sid = (transport as any).sessionId;
+          const sid = transportSessionIds.get(transport);
           if (sid) {
             activeSessions.delete(sid);
             logger.info(`[MCP] Session closed: ${sid}`);
@@ -1099,7 +1174,9 @@ async function main() {
     logger.info(`=== TastyScanner MCP Server listening on port ${PORT} ===`);
     logger.info(`  Streamable HTTP: http://0.0.0.0:${PORT}/mcp`);
     logger.info(`  Health:          http://0.0.0.0:${PORT}/health`);
-    logger.info(`  Live trading:    ${ENABLE_LIVE_TRADING ? "ENABLED" : "DISABLED"}`);
+    logger.info(`  Auth:            ${MCP_AUTH_TOKEN ? "ENABLED (Bearer token)" : "DISABLED — set MCP_AUTH_TOKEN to secure"}`);
+    logger.info(`  Rate limit:      ${RATE_LIMIT_MAX} req/min per IP`);
+    logger.info(`  Live trading:    ${ENABLE_LIVE_TRADING ? "ENABLED ⚠️" : "DISABLED"}`);
   });
 }
 
