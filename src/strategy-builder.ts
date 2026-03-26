@@ -911,9 +911,9 @@ export class StrategyBuilder {
         }));
 
         allExpirations.push({
-          expirationDate: exp["expiration-date"] ?? exp.expirationDate ?? "",
-          daysToExpiration: exp["days-to-expiration"] ?? exp.daysToExpiration ?? 0,
-          expirationType: exp["expiration-type"] ?? exp.expirationType ?? "",
+          expirationDate: exp["expiration-date"] ?? "",
+          daysToExpiration: exp["days-to-expiration"] ?? 0,
+          expirationType: exp["expiration-type"] ?? "",
           strikes,
         });
       }

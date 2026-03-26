@@ -23,9 +23,11 @@ import {
 import { logger } from "./logger.js";
 import {
   TastyOrderApiResponse,
+  TastyOrderLegApiResponse,
   TastyWatchlistApiResponse,
   TastyWatchlistEntryApiResponse,
   TastyPositionApiResponse,
+  TastyPositionLegApiResponse,
   extractErrorMessage,
 } from "./tasty-api-types.js";
 
@@ -143,7 +145,7 @@ server.tool(
         }
 
         let entries = wl?.["watchlist-entries"] ?? wl?.entries ?? [];
-        let wlSymbols = entries.map((e: TastyWatchlistEntryApiResponse) => e.symbol ?? e).filter(Boolean);
+        let wlSymbols = entries.map((e: TastyWatchlistEntryApiResponse) => e.symbol ?? "").filter(Boolean);
 
         // Fallback to public watchlist if personal is empty or not found
         if (wlSymbols.length === 0) {
@@ -156,7 +158,7 @@ server.tool(
 
             if (match) {
               entries = match["watchlist-entries"] ?? match.entries ?? [];
-              wlSymbols = entries.map((e: TastyWatchlistEntryApiResponse) => e.symbol ?? e).filter(Boolean);
+              wlSymbols = entries.map((e: TastyWatchlistEntryApiResponse) => e.symbol ?? "").filter(Boolean);
             }
           } catch {
             // Public lookup also failed
@@ -181,8 +183,8 @@ server.tool(
       const metrics = await tastyClient.getBulkSymbolMetrics(targetSymbols);
 
       let results: MarketOverviewItem[] = metrics.map((m) => ({
-        symbol: m.symbol,
-        price: round(m["close-price"] ?? 0),
+        symbol: m.symbol ?? "",
+        price: round(parseFloat(String(m["close-price"] ?? "0"))),
         ivr: round((m["implied-volatility-index-rank"] ?? 0) * 100),
         iv: round((m["implied-volatility-index"] ?? 0) * 100),
         beta: round(m.beta ?? 0),
@@ -336,19 +338,20 @@ server.tool(
       const rawPositions = await tastyClient.getActivePositions();
 
       const positions: Position[] = rawPositions.map((pos: TastyPositionApiResponse) => {
-        const legs: PositionLeg[] = (pos.legs ?? [pos]).map((leg: TastyPositionApiResponse) => ({
-          type: leg["instrument-type"] ?? leg.instrumentType ?? "Equity Option",
-          strike: leg["strike-price"] ?? leg.strikePrice ?? null,
-          expiry: leg["expiration-date"] ?? leg.expirationDate ?? null,
-          quantity: leg.quantity ?? 0,
-          price: leg["average-open-price"] ?? leg.averageOpenPrice ?? 0,
-          option_type: leg["option-type"] ?? leg.optionType ?? null,
-          is_sell: (leg.quantity ?? 0) < 0,
+        const rawLegs = pos.legs ?? [pos as unknown as TastyPositionLegApiResponse];
+        const legs: PositionLeg[] = rawLegs.map((leg) => ({
+          type: (leg["instrument-type"] ?? "Equity Option") as string,
+          strike: typeof leg["strike-price"] === "string" ? parseFloat(leg["strike-price"]) : null,
+          expiry: (leg["expiration-date"] ?? leg["expires-at"] ?? null) as string | null,
+          quantity: (leg.quantity ?? 0) as number,
+          price: typeof leg["average-open-price"] === "string" ? parseFloat(leg["average-open-price"]) : 0,
+          option_type: (leg["option-type"] ?? null) as "C" | "P" | null,
+          is_sell: ((leg.quantity ?? 0) as number) < 0,
         }));
 
-        const symbol = pos["underlying-symbol"] ?? pos.underlyingSymbol ?? pos.symbol ?? "";
-        const marketPrice = pos["close-price"] ?? pos.closePrice ?? 0;
-        const tradingPrice = pos["average-open-price"] ?? pos.averageOpenPrice ?? 0;
+        const symbol = (pos["underlying-symbol"] ?? pos.symbol ?? "") as string;
+        const marketPrice = pos["close-price"] ? parseFloat(String(pos["close-price"])) : 0;
+        const tradingPrice = pos["average-open-price"] ? parseFloat(String(pos["average-open-price"])) : 0;
         const quantity = pos.quantity ?? 0;
         const pnl = round((marketPrice - tradingPrice) * quantity * 100);
         const pnlPercent = tradingPrice !== 0
@@ -356,7 +359,7 @@ server.tool(
           : 0;
 
         return {
-          position_id: String(pos.id ?? pos["id"] ?? ""),
+          position_id: String(pos.id ?? ""),
           symbol,
           strategy: _detectStrategy(legs),
           legs,
@@ -365,7 +368,7 @@ server.tool(
           pnl,
           pnl_percent: pnlPercent,
           dte: _calcMinDTE(legs),
-          opened_at: pos["created-at"] ?? pos.createdAt ?? new Date().toISOString(),
+          opened_at: (pos["created-at"] ?? new Date().toISOString()) as string,
         };
       });
 
@@ -576,10 +579,10 @@ server.tool(
         return errorResult("ORDER_NOT_FOUND", `No live order found with ID ${order_id}`);
       }
 
-      const currentPrice = order.price ?? order["price"] ?? 0;
-      const priceEffect = order["price-effect"] ?? order.priceEffect ?? "Credit";
-      const orderType = order["order-type"] ?? order.orderType ?? "Limit";
-      const timeInForce = order["time-in-force"] ?? order.timeInForce ?? "Day";
+      const currentPrice = typeof order.price === "string" ? parseFloat(order.price) : (order.price ?? 0);
+      const priceEffect = (order["price-effect"] ?? "Credit") as string;
+      const orderType = (order["order-type"] ?? "Limit") as string;
+      const timeInForce = (order["time-in-force"] ?? "Day") as string;
       const legs = order.legs ?? [];
 
       let newPrice: number;
@@ -613,11 +616,11 @@ server.tool(
         "time-in-force": timeInForce,
         "price": newPrice,
         "price-effect": priceEffect,
-        "legs": legs.map((leg: TastyPositionApiResponse) => ({
-          "action": leg.action ?? leg["action"],
-          "instrument-type": leg["instrument-type"] ?? leg.instrumentType ?? "Equity Option",
-          "quantity": leg.quantity ?? leg["quantity"],
-          "symbol": leg.symbol ?? leg["symbol"],
+        "legs": legs.map((leg: TastyOrderLegApiResponse) => ({
+          "action": leg.action ?? "",
+          "instrument-type": leg["instrument-type"] ?? "Equity Option",
+          "quantity": leg.quantity ?? 0,
+          "symbol": leg.symbol ?? "",
         })),
       };
 
@@ -672,19 +675,19 @@ server.tool(
         : [];
 
       const formatted = rawOrders.map((o: TastyOrderApiResponse) => ({
-        order_id: o.id ?? o["id"],
-        symbol: o["underlying-symbol"] ?? o.underlyingSymbol ?? "",
+        order_id: o.id,
+        symbol: o["underlying-symbol"] ?? "",
         status: o.status ?? "",
-        price: o.price ?? o["price"] ?? 0,
-        price_effect: o["price-effect"] ?? o.priceEffect ?? "",
-        order_type: o["order-type"] ?? o.orderType ?? "",
-        time_in_force: o["time-in-force"] ?? o.timeInForce ?? "",
-        received_at: o["received-at"] ?? o.receivedAt ?? "",
-        legs: (o.legs ?? []).map((leg: TastyPositionApiResponse) => ({
-          action: leg.action ?? leg["action"],
-          symbol: leg.symbol ?? leg["symbol"],
-          quantity: leg.quantity ?? leg["quantity"],
-          instrument_type: leg["instrument-type"] ?? leg.instrumentType ?? "",
+        price: typeof o.price === "string" ? parseFloat(o.price) : (o.price ?? 0),
+        price_effect: o["price-effect"] ?? "",
+        order_type: o["order-type"] ?? "",
+        time_in_force: o["time-in-force"] ?? "",
+        received_at: o["received-at"] ?? "",
+        legs: (o.legs ?? []).map((leg: TastyOrderLegApiResponse) => ({
+          action: leg.action ?? "",
+          symbol: leg.symbol ?? "",
+          quantity: leg.quantity ?? 0,
+          instrument_type: leg["instrument-type"] ?? "",
         })),
       }));
 
@@ -793,14 +796,14 @@ server.tool(
       const userFormatted = (Array.isArray(userWatchlists) ? userWatchlists : []).map((wl: TastyWatchlistApiResponse) => ({
         name: wl.name ?? wl["name"] ?? "",
         type: "personal" as const,
-        symbols: (wl["watchlist-entries"] ?? wl.entries ?? []).map((e: TastyWatchlistEntryApiResponse) => e.symbol ?? e),
+        symbols: (wl["watchlist-entries"] ?? wl.entries ?? []).map((e: TastyWatchlistEntryApiResponse) => e.symbol ?? ""),
       }));
 
-      let publicFormatted: { name: string; type: string; symbols: string[] }[] = [];
+      let publicFormatted: { name: string; type: string; symbol_count: number }[] = [];
       if (include_public !== false) {
         const publicWatchlists = await tastyClient.getPublicWatchlists();
         publicFormatted = (Array.isArray(publicWatchlists) ? publicWatchlists : []).map((wl: TastyWatchlistApiResponse) => ({
-          name: wl.name ?? wl["name"] ?? "",
+          name: wl.name ?? "",
           type: "platform" as const,
           symbol_count: (wl["watchlist-entries"] ?? wl.entries ?? []).length,
         }));
@@ -877,7 +880,7 @@ server.tool(
           // Get current watchlist, merge, replace
           const current = await tastyClient.getWatchlist(name);
           const currentEntries: TastyWatchlistEntryApiResponse[] = current?.["watchlist-entries"] ?? current?.entries ?? [];
-          const currentSymbols = new Set(currentEntries.map((e: TastyWatchlistEntryApiResponse) => (e.symbol ?? e).toUpperCase()));
+          const currentSymbols = new Set(currentEntries.map((e: TastyWatchlistEntryApiResponse) => (e.symbol ?? "").toUpperCase()));
           const newSymbols = symbols.filter((s) => !currentSymbols.has(s.toUpperCase()));
 
           if (newSymbols.length === 0) {
@@ -906,7 +909,7 @@ server.tool(
           const currentEntries: TastyWatchlistEntryApiResponse[] = current?.["watchlist-entries"] ?? current?.entries ?? [];
           const toRemove = new Set(symbols.map((s) => s.toUpperCase()));
           const filtered = currentEntries.filter(
-            (e: TastyWatchlistEntryApiResponse) => !toRemove.has((e.symbol ?? e).toUpperCase()),
+            (e: TastyWatchlistEntryApiResponse) => !toRemove.has((e.symbol ?? "").toUpperCase()),
           );
 
           await tastyClient.replaceWatchlist(name, {

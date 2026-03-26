@@ -70,7 +70,7 @@ export interface TastyOrderApiResponse {
   status?: string;
   "order-type"?: string;
   "time-in-force"?: string;
-  price?: string;
+  price?: string | number;
   "price-effect"?: string;
   "received-at"?: string;
   "updated-at"?: string;
@@ -81,6 +81,7 @@ export interface TastyOrderApiResponse {
   editable?: boolean;
   legs?: TastyOrderLegApiResponse[];
   data?: { id?: number; status?: string; items?: TastyOrderApiResponse[] };
+  [key: string]: unknown;
 }
 
 export interface TastyOrderLegApiResponse {
@@ -115,8 +116,14 @@ export interface TastyPositionApiResponse {
   "created-at"?: string;
   "updated-at"?: string;
   "expires-at"?: string;
+  "expiration-date"?: string;
+  "strike-price"?: string;
+  "option-type"?: string;
   multiplier?: number;
+  action?: string;
+  id?: number | string;
   legs?: TastyPositionLegApiResponse[];
+  [key: string]: unknown;
 }
 
 export interface TastyPositionLegApiResponse {
@@ -125,6 +132,7 @@ export interface TastyPositionLegApiResponse {
   quantity?: number;
   "quantity-direction"?: string;
   action?: string;
+  [key: string]: unknown;
 }
 
 // ---------------------------------------------------------------------------
