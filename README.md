@@ -125,34 +125,28 @@ with OAuth authentication (client credentials + refresh token).
 ### 1. Configure credentials
 
 ```bash
-cp tastyscanner-mcp/.env.example .env
-# Edit .env with your TastyTrade credentials
+cp .env.example .env
+# Edit .env with your TastyTrade OAuth credentials
 ```
 
 ### 2. Build and run
 
 ```bash
-# Build both containers
 docker compose build
-
-# Run
 docker compose up -d
-
-# Check health
 curl http://localhost:7698/health
 ```
 
-### 3. Register with DeerFlow
+### 3. Connect to Claude Desktop
 
-Add to your DeerFlow `extensions_config.json`:
+Add to `claude_desktop_config.json`:
 
 ```json
 {
-  "tastytrade": {
-    "enabled": true,
-    "type": "http",
-    "url": "http://tastyscanner-mcp:7698/mcp",
-    "description": "TastyTrade trading tools: market overview, strategies, positions, trade execution"
+  "mcpServers": {
+    "tastytrade": {
+      "url": "http://localhost:7698/mcp"
+    }
   }
 }
 ```
@@ -166,8 +160,12 @@ Add to your DeerFlow `extensions_config.json`:
 | `get_positions` | List current open positions with P&L |
 | `execute_trade` | Place an options order (⚠️ real money) |
 | `close_position` | Close an existing position |
+| `adjust_order` | Adjust working order price for better fill |
+| `get_working_orders` | List pending/unfilled orders |
 | `get_account_info` | Account balance and buying power |
 | `get_connection_status` | Check TastyTrade connection health |
+| `get_watchlists` | List personal and platform watchlists |
+| `manage_watchlist` | Create, add to, remove from, or delete watchlists |
 
 ### Tool Details
 
@@ -200,6 +198,31 @@ Returns: {order_id, status, message}
 ```
 Params: position_id, reason, limit_price?
 Returns: {order_id, status, pnl_realized, message}
+```
+
+#### `adjust_order`
+```
+Params: order_id, adjustment ('improve_fill' | 'custom'), custom_price?
+Returns: {order_id, old_price, new_price, status, message}
+⚠️ Requires ENABLE_LIVE_TRADING=true
+```
+
+#### `get_working_orders`
+```
+Params: (none)
+Returns: [{order_id, symbol, status, price, price_effect, legs[]}]
+```
+
+#### `get_watchlists`
+```
+Params: include_public? (default: true)
+Returns: {personal: [{name, symbols[]}], platform: [{name, symbol_count}]}
+```
+
+#### `manage_watchlist`
+```
+Params: action ('create' | 'add' | 'remove' | 'delete'), name, symbols?[]
+Returns: {success, message}
 ```
 
 ## Development
