@@ -327,14 +327,6 @@ If TastyScanner MCP Server saves you time or helps you trade better, consider su
 | 🥈 **$15/mo** | Early access to new features, priority support |
 | 🥇 **$50/mo** | Direct input on roadmap, 1:1 onboarding call |
 
-### Roadmap (Sponsor-Accelerated)
-
-- [ ] 📈 More strategies: Straddles, Strangles, Calendar spreads
-- [ ] 🔔 Alerts: Telegram/Discord notifications
-- [ ] 📊 Backtesting integration
-- [ ] 🔄 Multi-account support
-- [ ] 📱 Mobile companion app
-
 ---
 
 ## 📜 License
