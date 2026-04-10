@@ -969,7 +969,8 @@ async function main() {
   logger.info("=== TastyScanner MCP Server starting ===");
   logger.info(`Port: ${PORT}`);
   logger.info(`Production: ${TASTY_PRODUCTION}`);
-  logger.info(`Account: ${TASTY_ACCOUNT || "(auto-detect)"}`);
+  const maskedAccount = TASTY_ACCOUNT ? `***${TASTY_ACCOUNT.slice(-4)}` : "(auto-detect)";
+  logger.info(`Account: ${maskedAccount}`);
 
   // Connect to TastyTrade via OAuth
   if (TASTY_CLIENT_ID && TASTY_CLIENT_SECRET && TASTY_REFRESH_TOKEN) {
