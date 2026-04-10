@@ -53,7 +53,7 @@ TODO: Add demo GIF here
 | **POP Calculation** (Probability of Profit) | ✅ | ❌ |
 | **TypeScript** (Node.js ecosystem) | ✅ | Python only |
 | **Docker-first** | ✅ | Manual setup |
-| **Visual UI companion** ([TastyScanner app](https://github.com/technet365/TastyScanner)) | ✅ | ❌ |
+| **Watchlist Management** | ✅ | ❌ |
 
 ---
 
@@ -105,71 +105,46 @@ Add to your `claude_desktop_config.json`:
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Docker Network                        │
-│                                                         │
-│  ┌──────────────┐     ┌──────────────────┐             │
-│  │ TastyScanner │     │ TastyScanner-MCP │             │
-│  │   (UI app)   │     │   (port 7698)    │             │
-│  │  port 3333   │     │                  │             │
-│  └──────┬───────┘     └────────┬─────────┘             │
-│         │                      │                        │
-│         │    @tastytrade/api   │                        │
-│         └──────────┬───────────┘                        │
-│                    │                                    │
-│         ┌──────────▼───────────┐                       │
-│         │   TastyTrade API     │                       │
-│         │   (WebSocket + REST) │                       │
-│         └──────────────────────┘                       │
-│                                                         │
-│  ┌──────────────────┐                                  │
-│  │ DeerFlow Agent   │──── MCP HTTP ────► port 7698    │
-│  │ (tasty-autonomus)│                                  │
-│  └──────────────────┘                                  │
-└─────────────────────────────────────────────────────────┘
+┌────────────────────┐         ┌─────────────────────┐
+│  Claude / GPT /    │         │  TastyScanner-MCP   │
+│  Any AI Agent      │── MCP ──│    (port 7698)      │
+└────────────────────┘  HTTP   └──────────┬──────────┘
+                                          │
+                               ┌──────────▼──────────┐
+                               │   TastyTrade API    │
+                               └─────────────────────┘
 ```
 
-**Key decision:** The MCP server connects **independently** to TastyTrade using
-the same `@tastytrade/api` SDK. It does NOT proxy through the UI app. Both
-containers share credentials via `.env` but maintain separate connections.
-
-Why? The UI app is a Vite/React frontend (browser-side). It has no HTTP API
-to call. The MCP server is a Node.js backend service — it needs its own
-TastyTrade session.
+The MCP server connects to TastyTrade using the official `@tastytrade/api` SDK
+with OAuth authentication (client credentials + refresh token).
 
 ## Quick Start
 
 ### 1. Configure credentials
 
 ```bash
-cp tastyscanner-mcp/.env.example .env
-# Edit .env with your TastyTrade credentials
+cp .env.example .env
+# Edit .env with your TastyTrade OAuth credentials
 ```
 
 ### 2. Build and run
 
 ```bash
-# Build both containers
 docker compose build
-
-# Run
 docker compose up -d
-
-# Check health
 curl http://localhost:7698/health
 ```
 
-### 3. Register with DeerFlow
+### 3. Connect to Claude Desktop
 
-Add to your DeerFlow `extensions_config.json`:
+Add to `claude_desktop_config.json`:
 
 ```json
 {
-  "tastytrade": {
-    "enabled": true,
-    "type": "http",
-    "url": "http://tastyscanner-mcp:7698/mcp",
-    "description": "TastyTrade trading tools: market overview, strategies, positions, trade execution"
+  "mcpServers": {
+    "tastytrade": {
+      "url": "http://localhost:7698/mcp"
+    }
   }
 }
 ```
@@ -183,8 +158,12 @@ Add to your DeerFlow `extensions_config.json`:
 | `get_positions` | List current open positions with P&L |
 | `execute_trade` | Place an options order (⚠️ real money) |
 | `close_position` | Close an existing position |
+| `adjust_order` | Adjust working order price for better fill |
+| `get_working_orders` | List pending/unfilled orders |
 | `get_account_info` | Account balance and buying power |
 | `get_connection_status` | Check TastyTrade connection health |
+| `get_watchlists` | List personal and platform watchlists |
+| `manage_watchlist` | Create, add to, remove from, or delete watchlists |
 
 ### Tool Details
 
@@ -217,6 +196,31 @@ Returns: {order_id, status, message}
 ```
 Params: position_id, reason, limit_price?
 Returns: {order_id, status, pnl_realized, message}
+```
+
+#### `adjust_order`
+```
+Params: order_id, adjustment ('improve_fill' | 'custom'), custom_price?
+Returns: {order_id, old_price, new_price, status, message}
+⚠️ Requires ENABLE_LIVE_TRADING=true
+```
+
+#### `get_working_orders`
+```
+Params: (none)
+Returns: [{order_id, symbol, status, price, price_effect, legs[]}]
+```
+
+#### `get_watchlists`
+```
+Params: include_public? (default: true)
+Returns: {personal: [{name, symbols[]}], platform: [{name, symbol_count}]}
+```
+
+#### `manage_watchlist`
+```
+Params: action ('create' | 'add' | 'remove' | 'delete'), name, symbols?[]
+Returns: {success, message}
 ```
 
 ## Development
@@ -286,23 +290,6 @@ curl -X POST http://localhost:7698/mcp \
 | `MCP_AUTH_TOKEN` | No | — | Bearer token for endpoint auth. If set, all `/mcp` requests require `Authorization: Bearer <token>` |
 | `LOG_LEVEL` | No | `info` | `debug`, `info`, `warn`, `error` |
 | `ENABLE_LIVE_TRADING` | No | `false` | Set `true` to allow `execute_trade` and `adjust_order` |
-
-## How It Relates to TastyScanner
-
-This MCP server replicates key logic from the main TastyScanner app:
-
-| Main App File | MCP Equivalent | What it does |
-|--------------|----------------|--------------|
-| `services/brokers/tasty/tasty.broker.ts` | `src/tasty-client.ts` | TastyTrade connection, auth, WebSocket |
-| `services/market-overview/market-overview.service.ts` | `get_market_overview` tool | Symbol metrics scanning |
-| `models/strategies-builder.ts` | `src/strategy-builder.ts` | Iron Condor/spread construction |
-| `models/iron-condor.model.ts` | `src/strategy-builder.ts` | IC credit, POP, R:R calculation |
-| `services/brokers/tasty/tasty-account.model.ts` | `get_positions` + `execute_trade` | Order management |
-| `services/brokers/interfaces/` | `src/types.ts` | Type definitions |
-
-The strategy building logic (delta filtering, wing construction, credit spread
-pairing, POP calculation) is faithfully replicated from the MobX models into
-plain TypeScript functions suitable for server-side use.
 
 ## Security Notes
 
