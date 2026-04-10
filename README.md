@@ -8,8 +8,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue.svg)](https://www.typescriptlang.org/)
 [![MCP](https://img.shields.io/badge/MCP-2025--03--26-green.svg)](https://modelcontextprotocol.io/)
+[![Discord](https://img.shields.io/discord/1234567890?color=7289da&label=Discord&logo=discord&logoColor=white)](https://discord.gg/739SVUQBrE)
 
-[Features](#-features) • [Quick Start](#-quick-start) • [Documentation](#available-tools) • [Contributing](CONTRIBUTING.md) • [Sponsor](#-support-the-project)
+[Features](#-features) • [Quick Start](#-quick-start) • [Documentation](#available-tools) • [Discord](https://discord.gg/739SVUQBrE) • [Sponsor](#-support-the-project)
 
 </div>
 
@@ -53,6 +54,7 @@ TODO: Add demo GIF here
 | **POP Calculation** (Probability of Profit) | ✅ | ❌ |
 | **TypeScript** (Node.js ecosystem) | ✅ | Python only |
 | **Docker-first** | ✅ | Manual setup |
+| **Watchlist Management** | ✅ | ❌ |
 
 ---
 
@@ -312,6 +314,9 @@ If TastyScanner MCP Server saves you time or helps you trade better, consider su
 
 <a href="https://github.com/sponsors/technet365">
   <img src="https://img.shields.io/badge/Sponsor-❤️-red?style=for-the-badge&logo=github" alt="Sponsor on GitHub">
+</a>
+<a href="https://discord.gg/739SVUQBrE">
+  <img src="https://img.shields.io/badge/Discord-Join-7289da?style=for-the-badge&logo=discord&logoColor=white" alt="Join Discord">
 </a>
 
 ### Sponsor Benefits
