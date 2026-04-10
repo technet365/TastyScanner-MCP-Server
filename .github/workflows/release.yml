@@ -56,13 +56,17 @@ jobs:
         id: version
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
+      - name: Repository to lowercase
+        id: repo
+        run: echo "REPO_LC=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.VERSION }}
-            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ steps.repo.outputs.REPO_LC }}:${{ steps.version.outputs.VERSION }}
+            ghcr.io/${{ steps.repo.outputs.REPO_LC }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
