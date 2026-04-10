@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Discussions
+    url: https://github.com/technet365/TastyScanner-MCP-Server/discussions
+    about: Ask questions and discuss ideas
+  - name: 💖 Sponsor
+    url: https://github.com/sponsors/technet365
+    about: Support development via GitHub Sponsors

@@ -1,0 +1,34 @@
+services:
+  tastyscanner-mcp:
+    container_name: tastyscanner-mcp
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      - MCP_PORT=7698
+      - TASTY_CLIENT_ID=${TASTY_CLIENT_ID}
+      - TASTY_CLIENT_SECRET=${TASTY_CLIENT_SECRET}
+      - TASTY_REFRESH_TOKEN=${TASTY_REFRESH_TOKEN}
+      - TASTY_ACCOUNT=${TASTY_ACCOUNT}
+      - TASTY_PRODUCTION=${TASTY_PRODUCTION:-true}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - ENABLE_LIVE_TRADING=${ENABLE_LIVE_TRADING:-false}
+      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:-}
+    ports:
+      - "7698:7698"
+    networks:
+      - shared_network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:7698/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+networks:
+  shared_network:
+    external: true

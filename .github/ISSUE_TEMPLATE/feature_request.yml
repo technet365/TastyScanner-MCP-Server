@@ -1,0 +1,54 @@
+name: Feature Request
+description: Suggest a new feature or enhancement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a feature! We especially appreciate ideas for new MCP tools or trading strategies.
+
+  - type: dropdown
+    id: type
+    attributes:
+      label: Feature Type
+      options:
+        - New MCP Tool
+        - New Strategy (spreads, calendars, etc.)
+        - Integration (alerts, webhooks)
+        - Performance improvement
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Describe the feature you'd like
+    validations:
+      required: true
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use Case
+      description: How would you use this feature?
+      placeholder: "I want to... so that..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Have you considered any workarounds?
+
+  - type: checkboxes
+    id: sponsor
+    attributes:
+      label: Sponsorship
+      description: Features from sponsors get priority
+      options:
+        - label: I'm willing to sponsor this feature via GitHub Sponsors
