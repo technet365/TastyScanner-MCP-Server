@@ -1,0 +1,12 @@
+# Default owner for everything
+* @technet365
+
+# Core MCP server logic
+/src/mcp-server.ts @technet365
+/src/tasty-client.ts @technet365
+/src/strategy-builder.ts @technet365
+
+# CI/CD and infrastructure
+/.github/ @technet365
+/Dockerfile @technet365
+/docker-compose*.yml @technet365
