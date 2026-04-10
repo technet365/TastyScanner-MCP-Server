@@ -53,7 +53,6 @@ TODO: Add demo GIF here
 | **POP Calculation** (Probability of Profit) | ✅ | ❌ |
 | **TypeScript** (Node.js ecosystem) | ✅ | Python only |
 | **Docker-first** | ✅ | Manual setup |
-| **Watchlist Management** | ✅ | ❌ |
 
 ---
 
@@ -110,8 +109,11 @@ Add to your `claude_desktop_config.json`:
 │  Any AI Agent      │── MCP ──│    (port 7698)      │
 └────────────────────┘  HTTP   └──────────┬──────────┘
                                           │
+                                @tastytrade/api
+                                          │
                                ┌──────────▼──────────┐
                                │   TastyTrade API    │
+                               │ (WebSocket + REST)  │
                                └─────────────────────┘
 ```
 
