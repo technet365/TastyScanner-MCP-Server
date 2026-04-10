@@ -9,7 +9,7 @@
     "dev": "tsx src/mcp-server.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@tastytrade/api": "^6.0.1",
     "axios": "^1.7.0",
     "express": "^4.21.0",
